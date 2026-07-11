@@ -206,6 +206,14 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .live-dot::after { content: ""; position: absolute; inset: -4px;
                    border: 1px solid var(--green); border-radius: 50%; }
 .state-note { margin: 6px 0 0; color: var(--ink-3); font: 400 9px/1.45 var(--mono); }
+.state-live { color: var(--green); }
+.state-idle { color: var(--ink-3); }        /* calm — idle is expected, not an error */
+.state-limited { color: var(--orange); }
+.state-held { color: var(--ink-3); }
+.account.is-idle, .account.is-held { opacity: .82; }
+.account.is-limited { opacity: .9; }
+.provider-mode { color: var(--ink-3); font-weight: 500; text-transform: none;
+                 letter-spacing: 0; }
 
 .statusline { margin-top: 14px; color: var(--ink-2); font: 500 10px/1.5 var(--mono); }
 .statusline.is-error { color: var(--red); }
@@ -352,26 +360,41 @@ function windowMarkup(account,key){
     '</span><span class="win-value tone-'+tone(left)+'">'+esc(value)+"</span>"+
     meterMarkup(left)+'<p class="win-note">'+esc(note)+"</p></div>";
 }
+// Calm, specific state per account. Codex reads its CLI's own telemetry, so
+// idle/limited are EXPECTED states — label them clearly, never as "broken".
+function accountState(account){
+  if(isCurrent(account))return{cls:"live",label:"Live",note:"observed "+age(account.captured_at)};
+  const code=account.error_code||"";
+  const isCodex=account.provider==="codex";
+  if(code==="codex_usage_limit"||/usage limit/i.test(account.note||""))
+    return{cls:"limited",label:"Limited",note:account.retry_at?("resets "+untilReset(account.retry_at)):"resets soon"};
+  if(code==="codex_reauth_required")
+    return{cls:"held",label:"Sign-in expired",note:"run `codex login` on this account"};
+  if(isCodex&&account.stale)
+    return{cls:"idle",label:"Idle",note:"last seen "+age(account.captured_at)+" · run Codex to refresh"};
+  if(isCodex&&/no .*telemetry|no rate_limits/i.test(account.note||""))
+    return{cls:"idle",label:"Waiting",note:"run Codex once to start tracking"};
+  return{cls:"held",label:"Held",note:account.note||account.error_code||"no verified reading"};
+}
 function accountMarkup(account,columns){
-  const current=isCurrent(account);
-  const state=current?"Live":account.stale?"Stale":"Held";
-  const note=current?"observed "+age(account.captured_at)
-    :(account.note||account.error_code||"no verified reading");
-  const dot=current?'<span class="live-dot" aria-hidden="true"></span>':"";
-  return '<article class="account '+(current?"is-live":"is-held")+'" style="--win-cols:'+columns.length+'">'+
+  const s=accountState(account);
+  const dot=s.cls==="live"?'<span class="live-dot" aria-hidden="true"></span>':"";
+  return '<article class="account is-'+s.cls+'" style="--win-cols:'+columns.length+'">'+
     '<div class="acct-identity"><span class="acct-email">'+esc(account.email||account.name)+"</span>"+
     '<div class="acct-meta"><span>'+esc(account.name)+"</span><span>"+esc(account.plan||account.provider)+"</span></div></div>"+
     columns.map(k=>windowMarkup(account,k)).join("")+
-    '<div class="state"><span class="state-badge">'+dot+state+"</span>"+
-    '<p class="state-note">'+esc(note)+"</p></div></article>";
+    '<div class="state"><span class="state-badge state-'+s.cls+'">'+dot+esc(s.label)+"</span>"+
+    '<p class="state-note">'+esc(s.note)+"</p></div></article>";
 }
 function providerMarkup(provider,accounts){
   if(!accounts.length)return"";
   const columns=windowColumns(accounts);
   const title=provider==="claude"?"Claude":"Codex";
+  const sub=provider==="claude"?"real-time":"best-effort · updates as you use Codex";
   return '<section class="provider"><header class="provider-head">'+
     '<h2 class="provider-name">'+title+'</h2><span class="provider-count">'+
-    accounts.length+(accounts.length===1?" subscription":" subscriptions")+"</span></header>"+
+    accounts.length+(accounts.length===1?" subscription":" subscriptions")+
+    ' <span class="provider-mode">· '+sub+'</span></span></header>'+
     accounts.map(a=>accountMarkup(a,columns)).join("")+"</section>";
 }
 function validate(data){

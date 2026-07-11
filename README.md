@@ -45,9 +45,13 @@ and the `claude` and/or `codex` CLIs you already use.
 ```bash
 git clone https://github.com/pauldomanski/headroom
 cd headroom
-./install.sh          # symlinks bin/headroom onto your PATH
-headroom setup        # the wizard: connects accounts, styles your dashboard
+./install.sh              # symlinks bin/headroom onto your PATH
+headroom serve --demo     # OPTIONAL: preview it now with sample data, no setup
+headroom setup            # the wizard: connects accounts, styles your dashboard
 ```
+
+Want to see it before connecting anything? `headroom serve --demo` opens the
+dashboard on bundled sample data — it's exactly what the screenshots show.
 
 The wizard finds logins already on your machine (`~/.claude`, `~/.codex`) and
 adopts them in place — credentials are never moved, copied, or read beyond
@@ -77,17 +81,29 @@ headroom rotate            # limit hit? cool this login, switch to the next
 | `headroom run <model> -- <cmd>` | headless run with automatic rotation on limit-hit |
 | `headroom rotate [model]` | cool the current account, hand you the next |
 | `headroom serve [--open]` | local live dashboard (auto-refreshes stale data) |
+| `headroom serve --demo` | preview the dashboard with bundled sample data — no accounts needed |
 | `headroom statusline` | color-coded capacity for your Claude Code status line |
+| `headroom doctor` | environment + config health check (handy for bug reports) |
 
 ## How the reads work (and why they're safe)
 
-- **Claude** — your login token already has access to
+- **Claude — real-time.** Your login token already has access to
   `api.anthropic.com/api/oauth/usage`, the endpoint the Claude apps themselves
   use to draw their usage UI. headroom calls it read-only and verifies the
   organization the response belongs to matches the login bound to that slot —
   a swapped or clobbered login can never report another account's headroom.
-- **Codex** — the Codex CLI writes `rate_limits` telemetry into its session
-  logs on every turn. headroom reads the newest event from disk. Zero network.
+  Claude usage is always live.
+- **Codex — best-effort.** The Codex CLI writes `rate_limits` telemetry into
+  its session logs on every turn, and headroom reads the newest event from
+  disk (zero network). This means Codex usage is live *while you're using
+  Codex* and shows an honest **`Idle · last seen …`** state when an account
+  has been quiet, or **`Waiting · run Codex once to start tracking`** before
+  it has ever run. It never fabricates a reading. A live Codex read (via the
+  Codex app-server) is on the roadmap; until then, treat Codex as an
+  informative best-effort panel, not a real-time gauge.
+
+If you only run Claude, headroom is a fully real-time tool — Codex support is
+purely additive and every account is optional.
 - Snapshots are written atomically. The dashboard gets a sanitized projection
   (optionally with emails redacted) — raw identity material stays in the
   private state directory with `0600` permissions.

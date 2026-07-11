@@ -61,10 +61,14 @@ holds anything at 100%.
 
 ## Cooldowns
 
-A limit-hit writes `"<account>:<family>": <reset-epoch>` into
-`state/cooldowns.json`. The reset epoch comes from the provider's own
-`resets_at` when known, else a conservative default (5h for session, 7d for
-weekly). Cooldowns expire on their own; `headroom clear` removes them early.
+A limit-hit writes `"<account>:<scope>": <reset-epoch>` into
+`state/cooldowns.json`. `<scope>` is `*` for a session or weekly-all limit
+(account-wide — every model family on that account is held) and a specific
+model family only for a genuine model-scoped cap. The reset epoch comes from
+the provider's own `resets_at` when known, else a conservative future floor
+(≥15 min for a session hit, ≥6 h for a weekly hit). Cooldowns expire on their
+own; `headroom clear <account>` (or `<account>:<scope>`) removes them early,
+and `headroom clear` with no argument resets all.
 
 ## Staleness
 
@@ -87,5 +91,6 @@ picked on unproven capacity.
 ## Environment overrides
 
 Everything is overridable for testing or custom layouts: `HEADROOM_DIR`,
-`HEADROOM_SNAPSHOT_MAX_AGE`, `HEADROOM_CODEX_STALE_AFTER`,
+`HEADROOM_SNAPSHOT_MAX_AGE`, `HEADROOM_OBSERVATION_MAX_AGE`,
+`HEADROOM_CLOCK_SKEW`, `HEADROOM_CODEX_STALE_AFTER`,
 `HEADROOM_IDENTITY_TIMEOUT`, `HEADROOM_SERVE_MAX_AGE`, `HEADROOM_BIN_DIR`.

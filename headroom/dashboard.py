@@ -24,6 +24,43 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(
 SERVE_MAX_AGE = int(os.environ.get("HEADROOM_SERVE_MAX_AGE", "300"))
 
 
+def _repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def build_demo(out_dir=None):
+    """Render the dashboard from the bundled sample data — no accounts, no
+    config, no network. Lets anyone preview it in seconds before connecting."""
+    import time
+    sample = os.path.join(_repo_root(), "examples", "usage.sample.json")
+    with open(sample) as handle:
+        data = json.load(handle)
+    now = int(time.time())
+    data["generated"] = now - 30
+    resets = {"5h": now + 2 * 3600 + 11 * 60, "7d": now + 3 * 86400}
+    for account in data.get("accounts", []):
+        account["captured_at"] = now - 30
+        for key, window in (account.get("windows") or {}).items():
+            window["resets_at"] = resets["5h"] if key == "5h" else resets["7d"]
+            if "observed_at" in window:
+                window["observed_at"] = now - 30
+        sub = account.get("subscription")
+        if sub and sub.get("status") == "active_through":
+            sub["active_until"] = now + 21 * 86400
+            sub["checked_at"] = now - 3600
+    out_dir = out_dir or os.path.join(paths.base_dir(), "demo")
+    os.makedirs(out_dir, exist_ok=True)
+    demo_config = {"schema_version": 1,
+                   "dashboard": {"theme": "midnight", "title": "headroom (demo)"},
+                   "accounts": [{"name": a["name"], "provider": a["provider"],
+                                 "home": "/tmp/demo/" + a["name"]}
+                                for a in data["accounts"]]}
+    build(demo_config, out_dir)
+    with open(os.path.join(out_dir, "usage.json"), "w") as handle:
+        json.dump(data, handle)
+    return out_dir
+
+
 def build(config=None, out_dir=None, snapshot_file=None):
     config = registry.load() if config is None else config
     settings = registry.dashboard_settings(config)
@@ -55,6 +92,8 @@ def build(config=None, out_dir=None, snapshot_file=None):
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    demo = False
+
     def __init__(self, *args, directory=None, **kwargs):
         super().__init__(*args, directory=directory, **kwargs)
 
@@ -73,7 +112,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"forbidden: non-loopback Host")
             return
-        if self.path.split("?")[0] == "/usage.json":
+        # in demo mode the sample usage.json is a static file in the served dir;
+        # never try to re-collect (there are no real accounts)
+        if self.path.split("?")[0] == "/usage.json" and not self.demo:
             snapshot = paths.load_json(paths.public_snapshot_path())
             generated = (snapshot or {}).get("generated", 0)
             if not snapshot or time.time() - generated > SERVE_MAX_AGE:
@@ -99,13 +140,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
 
-def serve(open_browser=False, port=None):
-    config = registry.load()
-    settings = registry.dashboard_settings(config)
-    port = settings["port"] if port is None else port
-    out_dir = paths.public_dir()
-    build(config, out_dir)
-    handler = lambda *args, **kwargs: Handler(*args, directory=out_dir, **kwargs)  # noqa: E731
+def serve(open_browser=False, port=None, demo=False):
+    if demo:
+        out_dir = build_demo()
+        port = port or 8377
+    else:
+        config = registry.load()
+        settings = registry.dashboard_settings(config)
+        port = settings["port"] if port is None else port
+        out_dir = paths.public_dir()
+        build(config, out_dir)
+    handler_cls = type("HeadroomHandler", (Handler,), {"demo": demo})
+    handler = lambda *args, **kwargs: handler_cls(*args, directory=out_dir, **kwargs)  # noqa: E731
     try:
         server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     except OSError as error:

@@ -15,10 +15,14 @@ usage:
   headroom rotate [model]           cool the current account down, pick the next
   headroom mark <name> <model> [epoch]   manual cooldown
   headroom clear [name:family]      clear cooldown(s)
-  headroom dashboard                (re)build the static dashboard
-  headroom serve [--open] [--port N]     local live dashboard
+  headroom repin <name>             re-bind a Claude slot's usage org
+  headroom dashboard [--demo]       (re)build the static dashboard
+  headroom serve [--open] [--port N] [--demo]   local live dashboard
   headroom statusline               Claude Code status line output
   headroom accounts                 list connected accounts
+  headroom doctor                   environment + config health check
+
+Try it with no accounts:  headroom serve --demo   (bundled sample data)
 """
 import sys
 
@@ -33,6 +37,11 @@ def main(argv=None):
         return 1
     except ValueError as error:
         # e.g. a relative HEADROOM_DIR — a config problem, not a crash
+        print(f"headroom: {error}", file=sys.stderr)
+        return 1
+    except RuntimeError as error:
+        # e.g. an unreadable cooldown ledger reached from a write path —
+        # fail closed with the same clean message the read paths give
         print(f"headroom: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -128,12 +137,47 @@ def _dispatch(argv):
         return 0
     if command == "clear":
         from . import route
-        route.clear(args[0] if args else None)
-        print("cleared " + (args[0] if args else "all cooldowns"))
+        if not args:
+            route.clear(None)
+            print("cleared all cooldowns")
+            return 0
+        # cooldown keys are "<account>:<family>" or account-wide "<account>:*";
+        # accept a bare account name by clearing every key for it
+        cleared = route.clear(args[0])
+        if not cleared and ":" not in args[0]:
+            cool = route.cooldowns() or {}
+            hit = [k for k in list(cool) if k.split(":")[0] == args[0]]
+            for k in hit:
+                route.clear(k)
+            cleared = bool(hit)
+        print(f"cleared {args[0]}" if cleared else f"no cooldown matching {args[0]!r}")
+        return 0
+    if command == "repin":
+        # clear a Claude slot's remembered usage-org so it re-pins on the next
+        # collect (use if a legitimate multi-org account started holding with
+        # claude_usage_org_unverifiable/changed)
+        if not args:
+            print("usage: headroom repin <account>", file=sys.stderr)
+            return 2
+        config = registry.load()
+        hit = False
+        for account in config["accounts"]:
+            if account.get("name") == args[0]:
+                account.pop("pinned_usage_org", None)
+                hit = True
+        if not hit:
+            print(f"headroom: no account named {args[0]!r}", file=sys.stderr)
+            return 2
+        registry.save(config)
+        print(f"repinned {args[0]}: will re-bind its usage org on next collect")
         return 0
     if command == "dashboard":
         from . import dashboard, paths
-        dashboard.build(snapshot_file=paths.public_snapshot_path())
+        if "--demo" in args:
+            out = dashboard.build_demo()
+            print(f"demo dashboard built: {out}/index.html")
+        else:
+            dashboard.build(snapshot_file=paths.public_snapshot_path())
         return 0
     if command == "serve":
         from . import dashboard
@@ -144,13 +188,42 @@ def _dispatch(argv):
                 if not 1 <= port <= 65535:
                     raise ValueError
             except (IndexError, ValueError):
-                print("usage: headroom serve [--open] [--port 1-65535]",
+                print("usage: headroom serve [--open] [--port 1-65535] [--demo]",
                       file=sys.stderr)
                 return 2
-        return dashboard.serve(open_browser="--open" in args, port=port) or 0
+        return dashboard.serve(open_browser="--open" in args, port=port,
+                               demo="--demo" in args) or 0
     if command == "statusline":
         from . import statusline
         return statusline.main()
+    if command == "doctor":
+        import platform
+        import shutil
+
+        from . import paths
+        print(f"headroom {__version__}")
+        print(f"python     {platform.python_version()} ({platform.system()})")
+        try:
+            print(f"HEADROOM_DIR {paths.base_dir()}")
+        except ValueError as error:
+            print(f"HEADROOM_DIR INVALID: {error}")
+        for cli in ("claude", "codex"):
+            found = shutil.which(cli)
+            print(f"{cli:<10} {found or 'not found on PATH'}")
+        try:
+            accts = registry.accounts()
+            print(f"accounts   {len(accts)} configured: "
+                  + ", ".join(a["name"] for a in accts))
+        except registry.RegistryError as error:
+            print(f"accounts   none ({error})")
+        snap = paths.load_json(paths.private_snapshot_path())
+        if snap and snap.get("generated"):
+            import time
+            age = int(time.time() - snap["generated"])
+            print(f"snapshot   {age}s old, {len(snap.get('accounts', []))} accounts")
+        else:
+            print("snapshot   none yet (run `headroom collect`)")
+        return 0
     if command == "accounts":
         try:
             for account in registry.accounts():

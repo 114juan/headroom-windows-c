@@ -179,6 +179,13 @@ def connect_fresh(config, name, provider, quiet=False):
     finally:
         if not completed:
             rollback()
+            # tidy the slot dir we created if the connect was refused and it's
+            # now empty (credentials were rolled back)
+            try:
+                if os.path.isdir(home) and not os.listdir(home):
+                    os.rmdir(home)
+            except OSError:
+                pass
         discard_backup(backup_dir)
 
 

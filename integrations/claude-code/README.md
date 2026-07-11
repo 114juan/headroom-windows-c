@@ -8,8 +8,10 @@ Shows the account your session is running on with color-coded 5h/7d capacity,
 and who the rotator would pick next when you're running low:
 
 ```
-work · 5h 64% · 7d 47% · next: personal
+work · 5h 82% · 7d 47% · next: personal
 ```
+
+(the `next:` hint appears once the current account's 5h window passes 75%.)
 
 Add to `~/.claude/settings.json`:
 

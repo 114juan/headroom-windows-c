@@ -99,6 +99,10 @@ def ensure_fresh_snapshot(max_age=None):
     if not _snapshot_fresh(snapshot, now, max_age):
         try:
             snapshot = collector.run_collect(quiet=True)
+        except registry.RegistryError:
+            # no/broken config is a single clean message from main(), not a
+            # "collect failed" line followed by a second re-raise
+            raise
         except Exception as error:  # noqa: BLE001 — stale must not be promoted
             print(f"[headroom] collect failed: {error}", file=sys.stderr)
             snapshot = None
@@ -130,6 +134,9 @@ def block_reason(account, fam, snapshot_row, cool, now):
                               or snapshot_row.get("note") or "not ok")
     if snapshot_row.get("routable") is not True:
         return "trust unverified: " + str(snapshot_row.get("trust_state"))
+    if snapshot_row.get("trust_state") not in ("verified", "verified_local"):
+        # routable and trust_state must agree; a mismatch is corrupt state -> hold
+        return "trust/routable mismatch: " + str(snapshot_row.get("trust_state"))
     if snapshot_row.get("stale"):
         return "reading stale"
     captured_at = snapshot_row.get("captured_at")
@@ -156,10 +163,20 @@ def block_reason(account, fam, snapshot_row, cool, now):
             return f"{key} at 100%"
         if window.get("severity") == "critical" and window.get("is_active"):
             return f"{key} critical"
-    scoped = scoped_window_for(fam, windows)
-    if scoped is not None and _number(scoped.get("used_percent")) \
-            and scoped["used_percent"] >= 100:
-        return f"{fam} weekly cap at 100%"
+    # scoped weekly caps are per-MODEL (e.g. Opus); only gate on them for a
+    # specific model family, never for the generic "claude" route — otherwise
+    # an Opus cap would wrongly hold Sonnet/Haiku work.
+    scoped = scoped_window_for(fam, windows) if fam in (
+        "opus", "sonnet", "haiku", "fable") else None
+    if scoped is not None:
+        # fail CLOSED like 5h/7d: a scoped cap that exists but is unreadable
+        # must hold, not silently route an exhausted model family
+        scoped_pct = scoped.get("used_percent")
+        if scoped.get("freshness") != "expired_observation":
+            if not _number(scoped_pct) or not 0 <= scoped_pct <= 100:
+                return f"{fam} weekly cap reading invalid"
+            if scoped_pct >= 100:
+                return f"{fam} weekly cap at 100%"
     for key in (f"{account['name']}:{fam}", f"{account['name']}:*"):
         if key not in cool:
             continue
@@ -228,13 +245,22 @@ def mark(name, fam, epoch=None, account_wide=False, window="5h"):
 
 
 def clear(key=None):
+    """Return True if something was cleared, False if the key wasn't present."""
     with _cooldown_lock():
         if key is None:
-            save_cooldowns({})
-        else:
-            cool = _read_cooldowns() or {}
-            cool.pop(key, None)
-            save_cooldowns(cool)
+            save_cooldowns({})  # explicit full reset is allowed
+            return True
+        cool = _read_cooldowns()
+        if cool is None:
+            # don't let a targeted clear silently wipe an unreadable ledger
+            raise RuntimeError(
+                "cooldown ledger unreadable — refusing to clear one key; "
+                "inspect state/cooldowns.json (or `headroom clear` to reset all)")
+        if key not in cool:
+            return False
+        cool.pop(key, None)
+        save_cooldowns(cool)
+        return True
 
 
 def window_reset(snapshot, name, window_key):
@@ -317,6 +343,11 @@ def cmd_exec(fam, command):
           file=sys.stderr)
     try:
         os.execvp(command[0], command)
+    except FileNotFoundError:
+        cli = "Claude Code" if command[0] == "claude" else "Codex"
+        print(f"[headroom] `{command[0]}` not found on PATH — install the "
+              f"{cli} CLI first", file=sys.stderr)
+        return 127
     except OSError as error:
         print(f"[headroom] cannot exec {command[0]}: {error}", file=sys.stderr)
         return 127

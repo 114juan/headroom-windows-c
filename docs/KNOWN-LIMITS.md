@@ -15,15 +15,29 @@ unpinned — if an attacker controls your config home *before* first use, TOFU
 cannot detect it (they could also just take the credentials). Run
 `headroom collect` once right after connecting to close the window.
 
-## Codex telemetry is not identity-stamped upstream
+## Codex tracking is best-effort (log-derived), not real-time
 
-Codex session logs don't reliably record which user's quota a `rate_limits`
-event describes (openai/codex#16323), and some versions emit
-`rate_limits: null` (openai/codex#14880). headroom binds telemetry to the
-slot's directory and validates the event shape, but cannot cryptographically
-bind it to the login. A future version should use the app-server
-`account/rateLimits/read` API once it is stable across releases. If you
-recycle a Codex home between accounts, delete `sessions/` when switching.
+Codex has no live usage API that headroom can call today, so Codex usage is
+read from the CLI's own `rate_limits` session telemetry on disk. Consequences,
+all surfaced honestly on the dashboard rather than hidden:
+
+- an account you're actively using shows **Live**;
+- an account that's been quiet shows **Idle — last seen Nh ago** with its last
+  known reading (never promoted to "live", never counted as verified headroom
+  by the router);
+- an account that has never run Codex shows **Waiting — run Codex once to
+  start tracking**;
+- a genuinely rate-limited account shows **Limited — resets …**.
+
+This is why Claude is the real-time first-class provider and Codex is labelled
+best-effort. The durable fix is the Codex **app-server** (`account/rateLimits`)
+live read; it initializes cleanly and is on the roadmap, gated on the method
+being stable across Codex releases. Additional upstream gaps: session logs
+don't reliably identity-stamp which user a `rate_limits` event belongs to
+(openai/codex#16323) and some versions emit `rate_limits: null`
+(openai/codex#14880). headroom binds telemetry to the slot's directory and
+validates the event shape. If you recycle a Codex home between accounts,
+delete `sessions/` when switching.
 
 ## `verified_local` identities are routable
 
@@ -48,7 +62,9 @@ before the limit hits, those side effects happen once per attempt. Use
 
 ## The local dashboard is plain HTTP on 127.0.0.1
 
-`headroom serve` binds loopback only, but performs no Host-header validation
-and no auth. On a multi-user machine, other local users can read it (it
-serves the sanitized public snapshot — redacted by default). For anything
-shared, put the static build behind your own web server and auth.
+`headroom serve` binds loopback only AND validates the `Host` header — a
+non-loopback Host is rejected with 403, so a remote page can't reach it via
+DNS-rebinding. What it does NOT have is authentication: any process on the
+same machine using a normal loopback Host can read the served feed (the
+sanitized public snapshot — emails redacted by default). For anything shared
+or multi-user, put the static build behind your own web server and auth.
