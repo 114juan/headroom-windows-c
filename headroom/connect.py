@@ -115,8 +115,23 @@ def add_account(config, name, provider, home, expected_email=None):
     entry = {"name": name, "provider": provider, "home": registry.expand(home)}
     if expected_email:
         entry["expected_email"] = expected_email
-    config.setdefault("accounts", []).append(entry)
-    registry.save(config)
+
+    def _append(cfg):
+        if not any(a.get("name") == name for a in cfg.get("accounts", [])):
+            cfg.setdefault("accounts", []).append(dict(entry))
+
+    try:
+        # locked reload-append against the latest on-disk config, so a
+        # concurrent collector pin-write or connect can't drop this account
+        registry.mutate(_append)
+    except registry.RegistryError:
+        # config doesn't exist yet (wizard building a fresh one) — create it
+        config.setdefault("accounts", []).append(entry)
+        registry.save(config)
+        return entry
+    # reflect into the caller's in-memory config too (the wizard keeps using it)
+    if not any(a.get("name") == name for a in config.get("accounts", [])):
+        config.setdefault("accounts", []).append(entry)
     return entry
 
 

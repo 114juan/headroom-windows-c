@@ -105,7 +105,11 @@ headroom rotate            # limit hit? cool this login, switch to the next
   informative best-effort panel, not a real-time gauge.
 
 If you only run Claude, headroom is a fully real-time tool — Codex support is
-purely additive and every account is optional.
+purely additive and every account is optional. In this release **routing and
+rotation are Claude-only** (Claude has a live, identity-bound usage API);
+Codex accounts are tracked on the dashboard and `headroom codex` launches
+them, but headroom won't make capacity-based routing decisions for Codex until
+its live read lands. See [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).
 - Snapshots are written atomically. The dashboard gets a sanitized projection
   (optionally with emails redacted) — raw identity material stays in the
   private state directory with `0600` permissions.

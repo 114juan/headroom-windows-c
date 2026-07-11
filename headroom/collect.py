@@ -163,21 +163,41 @@ def claude_local_identity(home):
     }
 
 
-def local_fingerprint(provider, home):
-    """The identity fingerprint currently bound INSIDE the slot, read from
-    local files only (no network). Used by the router to detect that a home
-    was re-logged into a different account since the snapshot was taken —
-    otherwise it would route the new identity on the old one's capacity."""
+def credential_digest(provider, home):
+    """A digest of the ACTUAL token the provider CLI will use — the Claude
+    `.credentials.json` accessToken or the Codex `auth.json` access_token.
+    Binding to this (not just the identity metadata) closes the split-token
+    TOCTOU: swapping only the credential file changes this digest even if the
+    identity metadata still names the old account."""
     try:
         if provider == "claude":
-            return claude_local_identity(home)["account_fingerprint"]
-        auth = paths.load_json(os.path.join(home, "auth.json")) or {}
-        claims = decode_jwt_payload((auth.get("tokens") or {}).get("id_token"))
-        provider_claims = claims.get("https://api.openai.com/auth") or {}
-        return fingerprint(provider_claims.get("chatgpt_account_id")
-                           or claims.get("sub"))
-    except (IdentityBindingError, ValueError, KeyError, OSError):
+            oauth = (paths.load_json(os.path.join(home, ".credentials.json"))
+                     or {}).get("claudeAiOauth") or {}
+            token = oauth.get("accessToken")
+        else:
+            token = ((paths.load_json(os.path.join(home, "auth.json")) or {})
+                     .get("tokens") or {}).get("access_token")
+        return hashlib.sha256(token.encode()).hexdigest()[:16] if token else None
+    except (OSError, ValueError, AttributeError):
         return None
+
+
+def local_binding(provider, home):
+    """(identity_fingerprint, credential_digest) currently bound in the slot,
+    from local files only (no network). The router compares BOTH against the
+    snapshot to detect a home re-logged into a different account/token."""
+    try:
+        if provider == "claude":
+            fp = claude_local_identity(home)["account_fingerprint"]
+        else:
+            auth = paths.load_json(os.path.join(home, "auth.json")) or {}
+            claims = decode_jwt_payload((auth.get("tokens") or {}).get("id_token"))
+            provider_claims = claims.get("https://api.openai.com/auth") or {}
+            fp = fingerprint(provider_claims.get("chatgpt_account_id")
+                             or claims.get("sub"))
+    except (IdentityBindingError, ValueError, KeyError, OSError):
+        fp = None
+    return fp, credential_digest(provider, home)
 
 
 def claude_plan(home):
@@ -538,6 +558,8 @@ def collect(accounts, backoff=None, persist_backoff=None):
         try:
             if account["provider"] == "claude":
                 identity = claude_identity(account["home"])
+                identity["credential_digest"] = credential_digest(
+                    "claude", account["home"])
                 result["identity"] = identity
                 result["identity_verified"] = identity["verified"]
                 result["identity_method"] = identity["method"]
@@ -563,6 +585,7 @@ def collect(accounts, backoff=None, persist_backoff=None):
                 result["ok"] = True
             else:
                 identity = codex_identity(account["home"])
+                identity["credential_digest"] = credential_digest("codex", account["home"])
                 result["identity"] = identity
                 result["identity_verified"] = identity["verified"]
                 result["identity_method"] = identity["method"]
@@ -687,10 +710,13 @@ def run_collect(quiet=False):
             (backoff.get("providers") or {}).pop("anthropic_usage_api", None)
             paths.write_json_atomic(paths.backoff_path(), backoff)
         paths.write_json_atomic(paths.private_snapshot_path(), snapshot)
-        settings = registry.dashboard_settings(config)
+        # reload settings fresh (not the config loaded at collect start) so a
+        # redaction change made mid-collect governs the published projection,
+        # and default to redacted if unset
+        settings = registry.dashboard_settings()
         paths.write_json_atomic(
             paths.public_snapshot_path(),
-            public_snapshot(snapshot, settings.get("redact_emails", False)),
+            public_snapshot(snapshot, settings.get("redact_emails", True)),
             mode=0o644,
         )
         if not quiet:

@@ -15,6 +15,30 @@ unpinned — if an attacker controls your config home *before* first use, TOFU
 cannot detect it (they could also just take the credentials). Run
 `headroom collect` once right after connecting to close the window.
 
+## Codex is tracked, not routed (in this release)
+
+Because Codex usage is log-derived and can't be cryptographically bound to the
+login (see below), headroom does NOT make capacity-based routing/rotation
+decisions for Codex accounts in this release — it would risk routing on
+another account's stale numbers. Codex accounts are fully tracked on the
+dashboard (best-effort), and `headroom codex` still launches on your first
+configured Codex account; but `headroom pick/rotate/run` for Codex is held
+with a clear message. Claude — which has a live, identity-bound usage API — is
+the fully-routed provider. (Set `HEADROOM_CODEX_ROUTING=1` to opt in anyway.)
+Codex routing returns once the app-server live read lands.
+
+## A project's own CLI settings can override the selected provider
+
+headroom scrubs provider-override environment variables before launching a
+CLI, but Claude Code and Codex also read their OWN config after startup — a
+project `.claude/settings.json` with an `env` block or `apiKeyHelper`, or a
+Codex `config.toml` custom provider, is applied by the CLI itself and can send
+your session to a different provider/account than the slot headroom selected.
+headroom can't override that from outside. If you use alternate-provider
+settings (Bedrock/Vertex/custom gateways), headroom's account routing does not
+apply to those sessions — use headroom only with direct OAuth/subscription
+logins.
+
 ## Codex tracking is best-effort (log-derived), not real-time
 
 Codex has no live usage API that headroom can call today, so Codex usage is

@@ -20,6 +20,7 @@ def _claude_row(name="a", used5h=10.0, used7d=20.0, ok=True, **over):
     row = {
         "name": name, "provider": "claude", "plan": "Max 20x", "ok": ok,
         "stale": False, "routable": ok, "identity_verified": True,
+        "identity": {"account_fingerprint": "AAAA", "credential_digest": "BBBB"},
         "trust_state": "verified" if ok else "held", "captured_at": now - 10,
         "source": "anthropic_usage_api",
         "windows": {
@@ -73,6 +74,13 @@ class RegistryValidation(unittest.TestCase):
 class BlockReasonFailClosed(unittest.TestCase):
     def setUp(self):
         self.now = time.time()
+        # the router re-derives the slot's live identity+credential; in tests
+        # there are no real homes, so return the fixture's bound values
+        self._orig_binding = collect.local_binding
+        collect.local_binding = lambda provider, home: ("AAAA", "BBBB")
+
+    def tearDown(self):
+        collect.local_binding = self._orig_binding
 
     _UNSET = object()
 
@@ -125,26 +133,21 @@ class BlockReasonFailClosed(unittest.TestCase):
         self.assertIsNotNone(self.reason(row))
 
     def test_identity_mismatch_holds(self):
-        from headroom import collect
-        row = _claude_row()
-        row["identity"] = {"account_fingerprint": "aaaa"}
-        original = collect.local_fingerprint
-        collect.local_fingerprint = lambda provider, home: "bbbb"
-        try:
-            self.assertIsNotNone(self.reason(row))
-        finally:
-            collect.local_fingerprint = original
+        collect.local_binding = lambda provider, home: ("XXXX", "BBBB")
+        self.assertIsNotNone(self.reason(_claude_row()))
+
+    def test_credential_changed_holds(self):
+        collect.local_binding = lambda provider, home: ("AAAA", "WRONG")
+        self.assertIsNotNone(self.reason(_claude_row()))
 
     def test_identity_match_routes(self):
-        from headroom import collect
+        # setUp already patches local_binding to the matching values
+        self.assertIsNone(self.reason(_claude_row()))
+
+    def test_no_snapshot_identity_holds(self):
         row = _claude_row()
-        row["identity"] = {"account_fingerprint": "aaaa"}
-        original = collect.local_fingerprint
-        collect.local_fingerprint = lambda provider, home: "aaaa"
-        try:
-            self.assertIsNone(self.reason(row))
-        finally:
-            collect.local_fingerprint = original
+        row.pop("identity")
+        self.assertIsNotNone(self.reason(row))
 
     def test_generic_claude_not_blocked_by_opus_cap(self):
         row = _claude_row()

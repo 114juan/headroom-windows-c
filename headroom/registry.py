@@ -70,7 +70,9 @@ def family_provider(fam):
 
 
 def expand(path):
-    return os.path.abspath(os.path.expanduser(path))
+    # realpath so two paths that resolve to the same home (one via a symlink)
+    # canonicalize identically for storage and duplicate detection
+    return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
 
 
 def validate(config):
@@ -161,6 +163,17 @@ def config_lock():
     finally:
         fcntl.flock(handle, fcntl.LOCK_UN)
         handle.close()
+
+
+def mutate(fn):
+    """Locked reload-mutate-validate-save. Raises RegistryError if the config
+    doesn't exist or is corrupt (never creates/overwrites here). Use for every
+    non-interactive config write so concurrent writers can't lose each other."""
+    with config_lock():
+        config = load()
+        fn(config)
+        save(config)
+        return config
 
 
 def apply_pins(pins):

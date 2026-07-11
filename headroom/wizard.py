@@ -53,6 +53,12 @@ def run_setup():
                 print("left the existing config untouched — fix or delete it, "
                       "then re-run setup.")
                 return 1
+            backup = config_file + ".corrupt.bak"
+            try:
+                os.replace(config_file, backup)
+                print(f"backed the corrupt config up to {backup}")
+            except OSError:
+                pass
             config = {}
         config.setdefault("schema_version", 1)
         config.setdefault("accounts", [])

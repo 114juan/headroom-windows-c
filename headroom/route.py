@@ -115,7 +115,9 @@ def ensure_fresh_snapshot(max_age=None):
 
 def _snapshot_accounts(snapshot):
     rows = snapshot.get("accounts") if isinstance(snapshot, dict) else None
-    return {row["name"]: row for row in (rows or [])
+    if not isinstance(rows, list):
+        rows = []
+    return {row["name"]: row for row in rows
             if isinstance(row, dict) and row.get("name")}
 
 
@@ -126,8 +128,18 @@ def scoped_window_for(fam, windows):
     return None
 
 
+# Codex usage tracking is log-derived and can't be cryptographically bound to
+# the login (openai/codex#16323), so capacity-based ROUTING of Codex is
+# disabled in this release — Codex is tracked on the dashboard (best-effort)
+# but headroom only routes Claude. Re-enable once the app-server live read
+# lands. `headroom codex` still launches (see cmd_exec).
+CODEX_ROUTING_ENABLED = os.environ.get("HEADROOM_CODEX_ROUTING") == "1"
+
+
 def block_reason(account, fam, snapshot_row, cool, now):
     """None when the account has proven headroom; otherwise why not."""
+    if account.get("provider") == "codex" and not CODEX_ROUTING_ENABLED:
+        return "Codex is dashboard-only in this release (best-effort tracking)"
     if cool is None:
         return "cooldown ledger unreadable — inspect/delete state/cooldowns.json"
     if snapshot_row is None:
@@ -144,14 +156,22 @@ def block_reason(account, fam, snapshot_row, cool, now):
     # since this snapshot was taken. Re-derive the identity currently bound in
     # the slot (local, no network) and hold if it no longer matches — otherwise
     # we'd launch the new identity on the old one's proven capacity.
-    snap_fp = (snapshot_row.get("identity") or {}).get("account_fingerprint")
-    if snap_fp:
-        current_fp = collector.local_fingerprint(account["provider"],
-                                                 account["home"])
-        if current_fp is None:
-            return "cannot verify slot identity — recollect"
-        if current_fp != snap_fp:
-            return "slot identity changed since snapshot — recollect"
+    identity = snapshot_row.get("identity")
+    identity = identity if isinstance(identity, dict) else {}
+    snap_fp = identity.get("account_fingerprint")
+    snap_digest = identity.get("credential_digest")
+    if not snap_fp:
+        # a routable snapshot with no bound identity can't be re-verified; hold
+        return "snapshot has no bound identity — recollect"
+    current_fp, current_digest = collector.local_binding(account["provider"],
+                                                         account["home"])
+    if current_fp is None:
+        return "cannot verify slot identity — recollect"
+    if current_fp != snap_fp:
+        return "slot identity changed since snapshot — recollect"
+    if snap_digest and current_digest != snap_digest:
+        # the actual credential token the CLI will use has changed
+        return "slot credential changed since snapshot — recollect"
     if snapshot_row.get("stale"):
         return "reading stale"
     captured_at = snapshot_row.get("captured_at")
@@ -181,14 +201,15 @@ def block_reason(account, fam, snapshot_row, cool, now):
     scoped = scoped_window_for(fam, windows) if fam in (
         "opus", "sonnet", "haiku", "fable") else None
     if scoped is not None:
-        # fail CLOSED like 5h/7d: a scoped cap that exists but is unreadable
+        # fail CLOSED like 5h/7d: a scoped cap that is unreadable or expired
         # must hold, not silently route an exhausted model family
+        if scoped.get("freshness") == "expired_observation":
+            return f"{fam} weekly cap reading expired — no current proof"
         scoped_pct = scoped.get("used_percent")
-        if scoped.get("freshness") != "expired_observation":
-            if not _number(scoped_pct) or not 0 <= scoped_pct <= 100:
-                return f"{fam} weekly cap reading invalid"
-            if scoped_pct >= 100:
-                return f"{fam} weekly cap at 100%"
+        if not _number(scoped_pct) or not 0 <= scoped_pct <= 100:
+            return f"{fam} weekly cap reading invalid"
+        if scoped_pct >= 100:
+            return f"{fam} weekly cap at 100%"
     for key in (f"{account['name']}:{fam}", f"{account['name']}:*"):
         if key not in cool:
             continue
@@ -353,10 +374,26 @@ def cmd_run(fam, command):
 def cmd_exec(fam, command):
     """Interactive launch: pick once, exec with the account's env, no capture."""
     account = pick(fam)
+    if account is None and registry.family_provider(fam) == "codex" \
+            and not CODEX_ROUTING_ENABLED:
+        # Codex isn't capacity-routed in this release; still launch on the
+        # first configured Codex account so `headroom codex` works.
+        ordered = registry.ordered_for(fam)
+        account = ordered[0] if ordered else None
+        if account:
+            print(f"[headroom] Codex is tracked best-effort (not capacity-"
+                  f"routed yet) — launching on {account['name']}", file=sys.stderr)
     if account is None:
         print(f"[headroom] no account for '{fam}' has proven headroom; "
               f"try `headroom status {fam}`", file=sys.stderr)
         return 2
+    # final recheck against the latest cooldown ledger right before exec, in
+    # case another process cooled this account since pick()
+    if registry.family_provider(fam) == "claude" or CODEX_ROUTING_ENABLED:
+        snapshot = ensure_fresh_snapshot()
+        row = _snapshot_accounts(snapshot).get(account["name"])
+        if block_reason(account, fam, row, cooldowns(), time.time()):
+            account = pick(fam) or account
     for var in collector.AUTH_OVERRIDE_VARS:
         os.environ.pop(var, None)
     os.environ[env_key(account)] = account["home"]

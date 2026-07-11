@@ -169,24 +169,36 @@ def _dispatch(argv):
         if not args:
             print("usage: headroom repin <account>", file=sys.stderr)
             return 2
-        config = registry.load()
-        hit = False
-        for account in config["accounts"]:
-            if account.get("name") == args[0]:
-                account.pop("pinned_usage_org", None)
-                hit = True
-        if not hit:
+        hits = []
+
+        def _repin(cfg):
+            for account in cfg["accounts"]:
+                if account.get("name") == args[0]:
+                    account.pop("pinned_usage_org", None)
+                    hits.append(account["name"])
+
+        registry.mutate(_repin)  # locked reload-mutate-save
+        if not hits:
             print(f"headroom: no account named {args[0]!r}", file=sys.stderr)
             return 2
-        registry.save(config)
         print(f"repinned {args[0]}: will re-bind its usage org on next collect")
         return 0
     if command == "dashboard":
-        from . import dashboard, paths
+        from . import collect, dashboard, paths
         if "--demo" in args:
             out = dashboard.build_demo()
             print(f"demo dashboard built: {out}/index.html")
         else:
+            # re-derive the public feed from the private snapshot with the
+            # CURRENT redaction setting, so a redaction change is reflected
+            private = paths.load_json(paths.private_snapshot_path())
+            if private:
+                settings = registry.dashboard_settings()
+                paths.write_json_atomic(
+                    paths.public_snapshot_path(),
+                    collect.public_snapshot(private,
+                                            settings.get("redact_emails", True)),
+                    mode=0o644)
             dashboard.build(snapshot_file=paths.public_snapshot_path())
         return 0
     if command == "serve":
