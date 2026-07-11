@@ -79,11 +79,13 @@ def main():
                 parts.append(f"{DIM}next: {candidate['name']}{RESET}")
     else:
         ok_rows = [row for row in rows.values()
-                   if row.get("ok") and row.get("provider") == "claude"]
+                   if row.get("ok") and row.get("routable")
+                   and not row.get("stale") and row.get("provider") == "claude"]
         if ok_rows:
-            best = min(ok_rows, key=lambda row: (
-                (row.get("windows", {}).get("5h") or {}).get("used_percent")
-                or 100))
+            def used_5h(row):
+                value = (row.get("windows", {}).get("5h") or {}).get("used_percent")
+                return value if isinstance(value, (int, float)) else 101
+            best = min(ok_rows, key=used_5h)
             windows = best.get("windows") or {}
             parts.append(f"{DIM}best:{RESET} {best['name']}")
             parts.append(window_text(windows, "5h", "5h"))

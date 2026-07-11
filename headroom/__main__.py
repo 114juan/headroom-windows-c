@@ -64,21 +64,27 @@ def _dispatch(argv):
         print(account["name"] if account else "")
         return 0 if account else 2
     if command == "env":
+        import shlex
+
         from . import route
         account = route.pick(registry.family(args[0] if args else "claude"))
         if not account:
             print("# no account with proven headroom", file=sys.stderr)
             return 2
-        print(f'export {route.env_key(account)}="{account["home"]}"'
+        print(f"export {route.env_key(account)}={shlex.quote(account['home'])}"
               f"  # account={account['name']}")
         return 0
     if command in ("claude", "codex"):
         from . import route
         fam = "claude" if command == "claude" else "codex"
+        # honour an explicit model flag so scoped weekly caps (e.g. Opus)
+        # still gate the routing decision
+        if "--model" in args and args.index("--model") + 1 < len(args):
+            fam = registry.family(args[args.index("--model") + 1])
         return route.cmd_exec(fam, [command] + args)
     if command == "run":
         from . import route
-        if "--" not in args or not args:
+        if not args or "--" not in args or args.index("--") == len(args) - 1:
             print("usage: headroom run <model> -- <command...>", file=sys.stderr)
             return 2
         separator = args.index("--")
@@ -110,7 +116,14 @@ def _dispatch(argv):
         from . import dashboard
         port = None
         if "--port" in args:
-            port = int(args[args.index("--port") + 1])
+            try:
+                port = int(args[args.index("--port") + 1])
+                if not 1 <= port <= 65535:
+                    raise ValueError
+            except (IndexError, ValueError):
+                print("usage: headroom serve [--open] [--port 1-65535]",
+                      file=sys.stderr)
+                return 2
         return dashboard.serve(open_browser="--open" in args, port=port) or 0
     if command == "statusline":
         from . import statusline

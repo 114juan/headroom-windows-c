@@ -114,13 +114,14 @@ def run_setup():
     title = ask("Dashboard title", config["dashboard"].get("title", "AI Fleet"))
     redact = ask_yes_no(
         "Redact account emails on the dashboard (p***@domain)? "
-        "Say yes if you might share it or screenshot it", False)
+        "Recommended if you might share or screenshot it", True)
     port = ask("Local dashboard port", str(config["dashboard"].get("port", 8377)))
+    port = int(port) if port.isdigit() and 1 <= int(port) <= 65535 else 8377
     config["dashboard"].update({
         "theme": theme,
         "title": title,
         "redact_emails": redact,
-        "port": int(port) if port.isdigit() else 8377,
+        "port": port,
     })
     registry.save(config)
     print(f"\nSaved {paths.config_path()}")

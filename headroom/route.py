@@ -10,9 +10,11 @@ limit errors; on a hit it cools that account down until the relevant window
 resets and retries the next candidate.
 """
 import datetime
+import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -21,6 +23,7 @@ from . import collect as collector
 from . import paths, registry
 
 SNAPSHOT_MAX_AGE = int(os.environ.get("HEADROOM_SNAPSHOT_MAX_AGE", "900"))
+OBSERVATION_MAX_AGE = int(os.environ.get("HEADROOM_OBSERVATION_MAX_AGE", "1800"))
 CLOCK_SKEW = int(os.environ.get("HEADROOM_CLOCK_SKEW", "300"))
 
 LIMIT_RE = re.compile(
@@ -43,23 +46,43 @@ def tfmt(epoch):
 
 
 def cooldowns():
-    value = paths.load_json(paths.cooldowns_path())
-    return value if isinstance(value, dict) else {}
+    """{} when no ledger exists; None when a ledger exists but is unreadable —
+    corrupt protective state must HOLD routing, not silently clear it."""
+    path = paths.cooldowns_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as handle:
+            value = json.load(handle)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def save_cooldowns(value):
     paths.write_json_atomic(paths.cooldowns_path(), value)
 
 
+def _snapshot_fresh(snapshot, now, max_age):
+    generated = (snapshot or {}).get("generated")
+    return (snapshot is not None and _number(generated)
+            and now - generated <= max_age and generated <= now + CLOCK_SKEW)
+
+
 def ensure_fresh_snapshot(max_age=None):
-    """Return a fresh private snapshot, collecting inline when stale/absent."""
+    """Return a fresh private snapshot, collecting inline when stale/absent.
+    Returns None when no fresh snapshot can be proven — callers must hold."""
     max_age = SNAPSHOT_MAX_AGE if max_age is None else max_age
     snapshot = paths.load_json(paths.private_snapshot_path())
     now = time.time()
-    generated = (snapshot or {}).get("generated")
-    if snapshot is None or not _number(generated) or now - generated > max_age \
-            or generated > now + CLOCK_SKEW:
-        snapshot = collector.run_collect(quiet=True)
+    if not _snapshot_fresh(snapshot, now, max_age):
+        try:
+            snapshot = collector.run_collect(quiet=True)
+        except Exception as error:  # noqa: BLE001 — stale must not be promoted
+            print(f"[headroom] collect failed: {error}", file=sys.stderr)
+            snapshot = None
+        if not _snapshot_fresh(snapshot, time.time(), max_age):
+            return None
     return snapshot
 
 
@@ -77,6 +100,8 @@ def scoped_window_for(fam, windows):
 
 def block_reason(account, fam, snapshot_row, cool, now):
     """None when the account has proven headroom; otherwise why not."""
+    if cool is None:
+        return "cooldown ledger unreadable — inspect/delete state/cooldowns.json"
     if snapshot_row is None:
         return "no usage reading yet"
     if snapshot_row.get("ok") is not True:
@@ -89,6 +114,8 @@ def block_reason(account, fam, snapshot_row, cool, now):
     captured_at = snapshot_row.get("captured_at")
     if not _number(captured_at) or captured_at > now + CLOCK_SKEW:
         return "reading clock invalid"
+    if now - captured_at > OBSERVATION_MAX_AGE:
+        return "reading expired"
     windows = snapshot_row.get("windows") or {}
     for key in ("5h", "7d"):
         window = windows.get(key)
@@ -107,9 +134,10 @@ def block_reason(account, fam, snapshot_row, cool, now):
     if scoped is not None and _number(scoped.get("used_percent")) \
             and scoped["used_percent"] >= 100:
         return f"{fam} weekly cap at 100%"
-    cooldown = cool.get(f"{account['name']}:{fam}")
-    if _number(cooldown) and now < cooldown:
-        return f"cooldown until {tfmt(cooldown)}"
+    for key in (f"{account['name']}:{fam}", f"{account['name']}:*"):
+        cooldown = cool.get(key)
+        if _number(cooldown) and now < cooldown:
+            return f"cooldown until {tfmt(cooldown)}"
     return None
 
 
@@ -121,7 +149,11 @@ def candidates(fam, snapshot=None):
     now = time.time()
     result = []
     for account in registry.ordered_for(fam):
-        reason = block_reason(account, fam, rows.get(account["name"]), cool, now)
+        if snapshot is None:
+            reason = "no fresh usage snapshot — `headroom collect` failing?"
+        else:
+            reason = block_reason(account, fam, rows.get(account["name"]),
+                                  cool, now)
         result.append((account, reason))
     return result
 
@@ -137,18 +169,28 @@ def env_key(account):
     return "CLAUDE_CONFIG_DIR" if account["provider"] == "claude" else "CODEX_HOME"
 
 
-def mark(name, fam, epoch=None):
+def mark(name, fam, epoch=None, account_wide=False):
+    """Cool an account down. Session/weekly-all limits are account-wide
+    (fam='*'); only genuine model-scoped caps cool a single family.
+    A reset in the past is useless — clamp to a conservative future floor."""
     cool = cooldowns()
-    cool[f"{name}:{fam}"] = epoch if epoch is not None else time.time() + 5 * 3600
+    if cool is None:
+        raise RuntimeError(
+            "cooldown ledger unreadable — inspect/delete state/cooldowns.json")
+    now = time.time()
+    floor = now + 15 * 60
+    epoch = (now + 5 * 3600) if epoch is None else max(float(epoch), floor)
+    key = f"{name}:{'*' if account_wide else fam}"
+    cool[key] = epoch
     save_cooldowns(cool)
-    return cool[f"{name}:{fam}"]
+    return epoch
 
 
 def clear(key=None):
     if key is None:
         save_cooldowns({})
     else:
-        cool = cooldowns()
+        cool = cooldowns() or {}
         cool.pop(key, None)
         save_cooldowns(cool)
 
@@ -186,17 +228,22 @@ def cmd_run(fam, command):
         if reason:
             print(f"[headroom] skip {account['name']}: {reason}", file=sys.stderr)
             continue
-        environment = os.environ.copy()
+        environment = collector.scrubbed_env()
         environment[env_key(account)] = account["home"]
         print(f"[headroom] running on {account['name']}", file=sys.stderr)
         process = subprocess.run(command, env=environment,
                                  capture_output=True, text=True)
-        output = (process.stdout or "") + "\n" + (process.stderr or "")
-        if LIMIT_RE.search(output):
-            window_key = "7d" if WEEKLY_RE.search(output) else "5h"
+        # Rotation replays the command on the next account, so it is only
+        # safe for idempotent commands (documented) and only fires on a
+        # FAILED run whose stderr shows a provider limit — matching stdout
+        # of a successful run must never trigger a replay.
+        if process.returncode != 0 and LIMIT_RE.search(process.stderr or ""):
+            sys.stdout.write(process.stdout or "")
+            sys.stderr.write(process.stderr or "")
+            window_key = "7d" if WEEKLY_RE.search(process.stderr or "") else "5h"
             reset = window_reset(snapshot, account["name"], window_key) \
                 or time.time() + (7 * 86400 if window_key == "7d" else 5 * 3600)
-            mark(account["name"], fam, reset)
+            mark(account["name"], fam, reset, account_wide=True)
             print(f"[headroom] {account['name']} hit its {window_key} limit -> "
                   f"cooled until {tfmt(reset)}; rotating", file=sys.stderr)
             continue
@@ -217,6 +264,8 @@ def cmd_exec(fam, command):
         print(f"[headroom] no account for '{fam}' has proven headroom; "
               f"try `headroom status {fam}`", file=sys.stderr)
         return 2
+    for var in collector.AUTH_OVERRIDE_VARS:
+        os.environ.pop(var, None)
     os.environ[env_key(account)] = account["home"]
     print(f"[headroom] {fam} -> {account['name']} ({account['home']})",
           file=sys.stderr)
@@ -227,11 +276,32 @@ def cmd_exec(fam, command):
         return 127
 
 
+def current_account(fam):
+    """The registry account this process's environment actually points at."""
+    provider = registry.family_provider(fam)
+    var = "CLAUDE_CONFIG_DIR" if provider == "claude" else "CODEX_HOME"
+    default = "~/.claude" if provider == "claude" else "~/.codex"
+    home = os.path.realpath(os.path.expanduser(os.environ.get(var, default)))
+    try:
+        for account in registry.ordered_for(fam):
+            if os.path.realpath(account["home"]) == home:
+                return account
+    except registry.RegistryError:
+        pass
+    return None
+
+
 def cmd_rotate(fam):
-    """Manual rotation: cool the current best down, report the next one."""
+    """Manual rotation: cool the account the CURRENT environment points at
+    (falling back to the current best) and report the next one."""
     snapshot = ensure_fresh_snapshot()
     ranked = candidates(fam, snapshot)
-    current = next((a for a, r in ranked if r is None), None)
+    current = current_account(fam)
+    if current is None:
+        current = next((a for a, r in ranked if r is None), None)
+        if current is not None:
+            print(f"(current session's account not in the registry — "
+                  f"rotating the first available: {current['name']})")
     if current is None:
         print(f"every account for '{fam}' is already limited or held")
         earliest = None
@@ -244,7 +314,7 @@ def cmd_rotate(fam):
         return 2
     reset = window_reset(snapshot, current["name"], "5h") \
         or time.time() + 5 * 3600
-    mark(current["name"], fam, reset)
+    reset = mark(current["name"], fam, reset, account_wide=True)
     successor = pick(fam)
     if successor is None:
         print(f"rotated {current['name']} out (cools until {tfmt(reset)}) — "
@@ -252,5 +322,5 @@ def cmd_rotate(fam):
         return 2
     print(f"rotated {current['name']} -> {successor['name']} ({fam}); "
           f"{current['name']} cools until {tfmt(reset)}")
-    print(f"export {env_key(successor)}=\"{successor['home']}\"")
+    print(f"export {env_key(successor)}={shlex.quote(successor['home'])}")
     return 0

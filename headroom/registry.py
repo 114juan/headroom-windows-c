@@ -20,14 +20,16 @@ Config shape (schema_version 1)::
     }
 """
 import os
+import re
 
 from . import paths
 
 PROVIDERS = ("claude", "codex")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 DEFAULT_DASHBOARD = {
     "theme": "midnight",
     "title": "AI Fleet",
-    "redact_emails": False,
+    "redact_emails": True,
     "port": 8377,
 }
 
@@ -49,13 +51,16 @@ class RegistryError(ValueError):
 
 
 def family(model):
-    model = (model or "").lower()
+    model = (model or "").lower().strip()
     for name in ("fable", "opus", "sonnet", "haiku", "codex", "gpt"):
         if name in model:
             return "codex" if name == "gpt" else name
-    if "claude" in model:
+    if not model or "claude" in model:
         return "claude"
-    return "claude"
+    # An unknown model must not silently route as generic Claude — a typo'd
+    # scoped model would bypass its own weekly cap.
+    raise RegistryError(
+        f"unknown model family: {model!r} (use opus/sonnet/haiku/claude/codex)")
 
 
 def family_provider(fam):
@@ -81,6 +86,10 @@ def validate(config):
         home = account.get("home")
         if not isinstance(name, str) or not name or name in names:
             raise RegistryError(f"account name missing/duplicate: {name!r}")
+        if not NAME_RE.fullmatch(name):
+            raise RegistryError(
+                f"account name {name!r} invalid: lowercase letters, digits, "
+                f"- and _ only (max 32 chars)")
         if provider not in PROVIDERS:
             raise RegistryError(f"account {name}: provider must be one of {PROVIDERS}")
         if not isinstance(home, str) or not home:

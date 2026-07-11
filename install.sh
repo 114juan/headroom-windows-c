@@ -17,7 +17,13 @@ EOF
 
 TARGET_DIR="${HEADROOM_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$TARGET_DIR"
-ln -sf "$REPO/bin/headroom" "$TARGET_DIR/headroom"
+TARGET="$TARGET_DIR/headroom"
+if [ -e "$TARGET" ] && [ "$(readlink "$TARGET" 2>/dev/null)" != "$REPO/bin/headroom" ] \
+    && [ "${1:-}" != "--force" ]; then
+  echo "refusing to overwrite existing $TARGET (re-run with --force)" >&2
+  exit 1
+fi
+ln -sf "$REPO/bin/headroom" "$TARGET"
 chmod +x "$REPO/bin/headroom"
 
 echo "installed: $TARGET_DIR/headroom -> $REPO/bin/headroom"

@@ -36,8 +36,12 @@ def build(config=None, out_dir=None, snapshot_file=None):
         "accounts": [{"name": account["name"], "provider": account["provider"]}
                      for account in registry.accounts(config)],
     }
-    html = html.replace("/*__HEADROOM_CONFIG__*/ null",
-                        json.dumps(injected, indent=None))
+    # script-safe serialization: <, >, & escaped so a hostile title/name can
+    # never terminate the <script> element (stored XSS via config)
+    payload = (json.dumps(injected, indent=None)
+               .replace("<", "\\u003c").replace(">", "\\u003e")
+               .replace("&", "\\u0026"))
+    html = html.replace("/*__HEADROOM_CONFIG__*/ null", payload)
     index = os.path.join(out_dir, "index.html")
     with open(index, "w") as handle:
         handle.write(html)
@@ -66,7 +70,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     snapshot = paths.load_json(paths.public_snapshot_path())
                 except Exception:  # noqa: BLE001 — serve the last good snapshot
                     pass
-            body = json.dumps(snapshot or {}).encode()
+            if not snapshot:
+                self.send_response(503)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error": "no usage snapshot yet"}')
+                return
+            body = json.dumps(snapshot).encode()
             self.send_response(200)
             self.send_header("content-type", "application/json")
             self.send_header("cache-control", "no-store")

@@ -74,7 +74,40 @@ def iso_ep(value):
 
 
 def fingerprint(value):
+    if not value:  # never mint a valid-looking fingerprint from a missing id
+        raise IdentityBindingError("identity_id_missing")
     return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
+
+# Auth-override variables that would silently redirect a provider CLI or API
+# call to a different account than the slot we selected (see
+# anthropics/claude-code#16238). Scrubbed from every subprocess/env we build.
+AUTH_OVERRIDE_VARS = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+)
+
+
+def scrubbed_env(base=None):
+    env = dict(os.environ if base is None else base)
+    for var in AUTH_OVERRIDE_VARS:
+        env.pop(var, None)
+    return env
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Authenticated requests never follow redirects — a redirect would
+    forward the bearer token to whatever origin the response names."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_no_redirect_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def open_authenticated(request, timeout):
+    return _no_redirect_opener.open(request, timeout=timeout)
 
 
 def retry_after_epoch(headers, now=None):
@@ -140,7 +173,7 @@ def claude_identity(home, runner=subprocess.run):
     """Provider-verified identity via `claude auth status`; local fallback."""
     binary = claude_bin()
     if binary:
-        env = os.environ.copy()
+        env = scrubbed_env()
         env["CLAUDE_CONFIG_DIR"] = home
         try:
             process = runner(
@@ -162,12 +195,18 @@ def claude_identity(home, runner=subprocess.run):
     return claude_local_identity(home)
 
 
-def codex_identity(home, opener=urllib.request.urlopen):
+def codex_identity(home, opener=open_authenticated):
     auth = paths.load_json(os.path.join(home, "auth.json"))
     if not auth:
         raise IdentityBindingError("codex_auth_missing")
     tokens = auth.get("tokens") or {}
     claims = decode_jwt_payload(tokens.get("id_token"))
+    # An expired id_token still names the right identity (Codex refreshes
+    # access tokens separately) — it lowers trust to local-only rather than
+    # holding the slot, and the userinfo call below can re-verify live.
+    expires = claims.get("exp")
+    token_stale = isinstance(expires, (int, float)) \
+        and expires < time.time() - 300
     provider_claims = claims.get("https://api.openai.com/auth") or {}
     record = {
         "verified": False,
@@ -175,7 +214,8 @@ def codex_identity(home, opener=urllib.request.urlopen):
         "account_fingerprint": fingerprint(
             provider_claims.get("chatgpt_account_id") or claims.get("sub")
         ),
-        "method": "openai_local_id_token",
+        "method": "openai_local_id_token_expired" if token_stale
+                  else "openai_local_id_token",
         "plan_type": provider_claims.get("chatgpt_plan_type"),
         "subscription": codex_subscription(provider_claims),
     }
@@ -229,7 +269,7 @@ def limit_entry(limit, minutes):
     }
 
 
-def claude_limits(home, expected_fingerprint, opener=urllib.request.urlopen):
+def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
     oauth = credentials.get("claudeAiOauth") or {}
     if not oauth.get("accessToken"):
@@ -318,26 +358,30 @@ def codex_limits(home, now=None):
         return {"note": "no Codex telemetry yet — run one Codex turn on this account"}
     files.sort(key=os.path.getmtime, reverse=True)
     newest = None
-    for path in files[:40]:
+    for path in files[:15]:
         file_mtime = int(os.path.getmtime(path))
         try:
-            with open(path, errors="ignore") as handle:
-                for line_number, line in enumerate(handle):
-                    if '"rate_limits"' not in line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    limits = _find_rate_limits(event)
-                    if not limits:
-                        continue
-                    captured_at = iso_ep(event.get("timestamp")) or file_mtime
-                    if captured_at > now + 300:
-                        captured_at = file_mtime
-                    order = (captured_at, file_mtime, path, line_number)
-                    if newest is None or order > newest[0]:
-                        newest = (order, captured_at, limits)
+            with open(path, "rb") as raw:
+                # bound the scan: only the tail of each session log
+                raw.seek(max(0, os.fstat(raw.fileno()).st_size - 512 * 1024))
+                tail = raw.read().decode("utf-8", errors="ignore")
+            for line_number, line in enumerate(tail.splitlines()):
+                if '"rate_limits"' not in line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                limits = _find_rate_limits(event)
+                if not limits or not isinstance(limits.get("primary"), dict) \
+                        and not isinstance(limits.get("secondary"), dict):
+                    continue
+                captured_at = iso_ep(event.get("timestamp")) or file_mtime
+                if captured_at > now + 300:
+                    captured_at = file_mtime
+                order = (captured_at, file_mtime, path, line_number)
+                if newest is None or order > newest[0]:
+                    newest = (order, captured_at, limits)
         except OSError:
             continue
     if newest is None:

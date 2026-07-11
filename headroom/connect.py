@@ -77,10 +77,16 @@ def backup_credentials(home, provider):
     for filename in CREDENTIAL_FILES[provider]:
         source = os.path.join(home, filename)
         if os.path.exists(source):
-            os.makedirs(directory, exist_ok=True)
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(os.path.dirname(directory), 0o700)
             shutil.copy2(source, os.path.join(directory, filename))
             saved.append(filename)
     return directory if saved else None, saved
+
+
+def discard_backup(backup_dir):
+    if backup_dir:
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def restore_credentials(home, provider, backup_dir, saved):
@@ -119,32 +125,21 @@ def connect_fresh(config, name, provider, quiet=False):
         print(f"cannot find the `{'claude' if provider == 'claude' else 'codex'}` "
               f"CLI on PATH — install it first", file=sys.stderr)
         return None
+    if not registry.NAME_RE.fullmatch(name):
+        print(f"slot name {name!r} invalid: lowercase letters, digits, - and _ "
+              f"only (max 32 chars)", file=sys.stderr)
+        return None
     home = os.path.join(paths.homes_dir(), name)
-    os.makedirs(home, exist_ok=True)
+    if os.path.realpath(home) != os.path.realpath(
+            os.path.join(paths.homes_dir(), os.path.basename(name))):
+        print("slot name resolves outside the homes directory; refused",
+              file=sys.stderr)
+        return None
+    os.makedirs(home, mode=0o700, exist_ok=True)
     backup_dir, saved = backup_credentials(home, provider)
     duplicates = existing_fingerprints(config, provider)
 
-    env = os.environ.copy()
-    env["CLAUDE_CONFIG_DIR" if provider == "claude" else "CODEX_HOME"] = home
-    if not quiet:
-        print(f"\nStarting the {provider} login for slot '{name}'.")
-        print("Complete the browser flow with the account you want on THIS slot.\n")
-    code = subprocess.run(login_argv(provider, binary), env=env).returncode
-    if code != 0:
-        if backup_dir:
-            restore_credentials(home, provider, backup_dir, saved)
-        print(f"login exited {code}; slot unchanged", file=sys.stderr)
-        return None
-
-    identity = slot_identity(provider, home)
-    if not identity or not identity.get("email"):
-        if backup_dir:
-            restore_credentials(home, provider, backup_dir, saved)
-        print("login completed but no identity could be read; rolled back",
-              file=sys.stderr)
-        return None
-    fingerprint = identity.get("account_fingerprint")
-    if fingerprint in duplicates:
+    def rollback():
         if backup_dir:
             restore_credentials(home, provider, backup_dir, saved)
         else:
@@ -152,16 +147,39 @@ def connect_fresh(config, name, provider, quiet=False):
                 target = os.path.join(home, filename)
                 if os.path.exists(target):
                     os.remove(target)
-        print(f"REFUSED: that login ({identity['email']}) is already connected "
-              f"as slot '{duplicates[fingerprint]}'. Slot rolled back.\n"
-              f"Log in with a different account, or use the existing slot.",
-              file=sys.stderr)
-        return None
 
-    entry = add_account(config, name, provider, home, identity["email"])
+    env = collector.scrubbed_env()
+    env["CLAUDE_CONFIG_DIR" if provider == "claude" else "CODEX_HOME"] = home
     if not quiet:
-        print(f"connected: {name} -> {identity['email']} ({provider})")
-    return entry
+        print(f"\nStarting the {provider} login for slot '{name}'.")
+        print("Complete the browser flow with the account you want on THIS slot.\n")
+    completed = False
+    try:
+        code = subprocess.run(login_argv(provider, binary), env=env).returncode
+        if code != 0:
+            print(f"login exited {code}; slot unchanged", file=sys.stderr)
+            return None
+        identity = slot_identity(provider, home)
+        if not identity or not identity.get("email"):
+            print("login completed but no identity could be read; rolled back",
+                  file=sys.stderr)
+            return None
+        fingerprint = identity.get("account_fingerprint")
+        if fingerprint in duplicates:
+            print(f"REFUSED: that login ({identity['email']}) is already "
+                  f"connected as slot '{duplicates[fingerprint]}'. Slot rolled "
+                  f"back.\nLog in with a different account, or use the "
+                  f"existing slot.", file=sys.stderr)
+            return None
+        entry = add_account(config, name, provider, home, identity["email"])
+        completed = True
+        if not quiet:
+            print(f"connected: {name} -> {identity['email']} ({provider})")
+        return entry
+    finally:
+        if not completed:
+            rollback()
+        discard_backup(backup_dir)
 
 
 def connect_adopt(config, name, provider, home, quiet=False):

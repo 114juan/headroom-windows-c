@@ -32,10 +32,10 @@ headroom fixes all three problems:
 2. **Read for free** — usage comes from the same endpoints your CLIs already
    use (Anthropic's OAuth usage API; Codex's on-disk session telemetry).
    Checking your limits never consumes them.
-3. **Rotate** — `headroom claude` always launches on the account with the most
-   proven capacity. When a limit hits, `headroom rotate` (or the `/rotator`
-   skill inside Claude Code) cools that login down until its window resets and
-   hands you the next one.
+3. **Rotate** — `headroom claude` launches on the first account in your
+   preference order with *proven* headroom. When a limit hits,
+   `headroom rotate` (or the `/rotator` skill inside Claude Code) cools that
+   login down until its window resets and hands you the next one.
 
 ## Quickstart
 
@@ -116,6 +116,18 @@ so Claude can rotate accounts for you when a limit hits.
 in `~/.headroom/state/public/`. Put them behind any static host or reverse
 proxy; add a cron for `headroom collect` to keep the JSON fresh. Turn on
 `redact_emails` in setup if the page might be visible to others.
+
+## Security posture
+
+The engine was adversarially reviewed cross-model (GPT-5.6 at x-high
+reasoning effort) before first release; every fixable finding is patched and
+the deliberate tradeoffs are documented in
+[docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md). Highlights: auth-override
+environment variables are scrubbed from every provider subprocess, usage
+snapshots are atomic with a sanitized public projection (emails redacted by
+default), authenticated requests never follow redirects, corrupt protective
+state holds routing instead of clearing it, and stale data is always shown
+as held — never promoted to live.
 
 ## A note on multiple accounts
 
