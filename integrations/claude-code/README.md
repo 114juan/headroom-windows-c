@@ -1,0 +1,53 @@
+# Claude Code integration
+
+Two plug-ins, both optional, both 30-second installs.
+
+## 1. Live headroom in your status line
+
+Shows the account your session is running on with color-coded 5h/7d capacity,
+and who the rotator would pick next when you're running low:
+
+```
+work · 5h 64% · 7d 47% · next: personal
+```
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "headroom statusline"
+  }
+}
+```
+
+(If `headroom` isn't on your PATH, use the absolute path to `bin/headroom`.)
+
+## 2. The /rotator skill
+
+Lets Claude Code rotate accounts for you: when a session dies on a usage
+limit, say "rotate the account" (or type `/rotator`) and Claude runs the
+headroom engine, cools the exhausted login down, and hands you the next one.
+
+Install by copying the skill into your personal skills directory:
+
+```bash
+mkdir -p ~/.claude/skills
+cp -r integrations/claude-code/skills/rotator ~/.claude/skills/
+```
+
+Restart Claude Code and type `/rotator`.
+
+## 3. Keeping usage fresh in the background (optional)
+
+`headroom serve` refreshes on demand, and `headroom status`/`pick` refresh
+automatically when the snapshot is stale — cron is NOT required. But if you
+want the dashboard warm at all times:
+
+```bash
+# crontab -e   (Linux)
+*/10 * * * * /path/to/headroom/bin/headroom collect >/dev/null 2>&1
+```
+
+macOS: `launchctl` works the same way, or just keep a `headroom serve` tab open.

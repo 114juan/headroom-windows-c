@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+# never commit live state or credentials
+state/
+homes/
+config.json
+usage-private.json

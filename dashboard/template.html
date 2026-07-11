@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en" data-theme="midnight">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>headroom</title>
+<style>
+/* ================================================================== base */
+:root {
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 0px;
+  --cell-gap: 3px;
+  --cell-radius: 1px;
+  --panel-shadow: none;
+  --cell-glow: none;
+  --meter-height: 14px;
+}
+
+/* ============================================================== themes */
+/* MIDNIGHT — dark control room */
+[data-theme="midnight"] {
+  --bg: #0b0e14; --bg-grid: rgba(255,255,255,.025);
+  --panel: #11151f; --panel-2: #0e1219;
+  --line: #1e2430; --line-strong: #2a3242;
+  --ink: #e8ecf4; --ink-2: #8b93a5; --ink-3: #5a6274;
+  --accent: #7aa2ff;
+  --green: #3ddc84; --yellow: #ffd54a; --orange: #ff9640; --red: #ff5d5d;
+  --unknown: #454c5c;
+  --cell-bg: #1a1f2b;
+  --cell-glow: 0 0 6px;
+  --panel-shadow: 0 1px 0 rgba(255,255,255,.03) inset;
+  --radius: 6px;
+}
+/* MINIMAL — white space and hairlines */
+[data-theme="minimal"] {
+  --bg: #ffffff; --bg-grid: transparent;
+  --panel: #ffffff; --panel-2: #fafafa;
+  --line: #ececec; --line-strong: #d8d8d8;
+  --ink: #111111; --ink-2: #6f6f6f; --ink-3: #a3a3a3;
+  --accent: #111111;
+  --green: #1db954; --yellow: #e6b800; --orange: #f07c22; --red: #e5484d;
+  --unknown: #d0d0d0;
+  --cell-bg: #f2f2f2;
+  --meter-height: 8px;
+  --cell-gap: 2px;
+  --radius: 0px;
+}
+/* CHROME — brushed metal instrument panel */
+[data-theme="chrome"] {
+  --bg: #c9cdd3;
+  --bg-grid: transparent;
+  --panel: linear-gradient(180deg, #f4f6f8 0%, #dfe3e8 55%, #d2d7dd 100%);
+  --panel-2: linear-gradient(180deg, #e8ebef, #d8dce2);
+  --line: #aeb4bc; --line-strong: #8f96a0;
+  --ink: #23262b; --ink-2: #565c66; --ink-3: #7d838d;
+  --accent: #2f6fed;
+  --green: #1e9e55; --yellow: #d3a10a; --orange: #e2711d; --red: #cf3f3f;
+  --unknown: #a6acb5;
+  --cell-bg: linear-gradient(180deg, #b9bec6, #cdd2d9);
+  --panel-shadow: 0 1px 0 #ffffff inset, 0 -1px 0 rgba(0,0,0,.08) inset,
+                  0 2px 6px rgba(30,35,42,.18);
+  --radius: 8px;
+  --cell-radius: 2px;
+}
+/* PAPER — warm parchment ledger */
+[data-theme="paper"] {
+  --bg: #f5efe6; --bg-grid: rgba(21,18,16,.035);
+  --panel: #fbf6eb; --panel-2: #f3ecdd;
+  --line: #c5ac85; --line-strong: #a98f68;
+  --ink: #151210; --ink-2: #3a2f25; --ink-3: #6e5e4d;
+  --accent: #c87555;
+  --green: #3f7d4e; --yellow: #c59b24; --orange: #c76a31; --red: #b0413a;
+  --unknown: #8b8277;
+  --cell-bg: #e6d2ba;
+  --radius: 0px;
+}
+/* TERMINAL — green phosphor CRT */
+[data-theme="terminal"] {
+  --bg: #050805; --bg-grid: rgba(51,255,102,.04);
+  --panel: #070b07; --panel-2: #060906;
+  --line: #123c1c; --line-strong: #1d5a2b;
+  --ink: #33ff66; --ink-2: #1fae47; --ink-3: #157a32;
+  --accent: #33ff66;
+  --green: #33ff66; --yellow: #e8ff47; --orange: #ffb347; --red: #ff4747;
+  --unknown: #123c1c;
+  --cell-bg: #0a140c;
+  --cell-glow: 0 0 8px;
+  --sans: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 0px;
+}
+[data-theme="terminal"] body { text-shadow: 0 0 4px rgba(51,255,102,.35); }
+[data-theme="terminal"] .panel { box-shadow: 0 0 12px rgba(51,255,102,.06) inset; }
+
+/* ================================================================ layout */
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0; min-width: 320px; color: var(--ink);
+  font-family: var(--sans); line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--bg-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+.shell { position: relative; z-index: 1; width: min(100% - 36px, 1280px);
+         margin: 0 auto; padding: 22px 0 56px; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center;
+           padding-bottom: 16px; border-bottom: 1px solid var(--line-strong); }
+.toolbar .brand { flex: 1 1 auto; min-width: 200px; }
+.title { margin: 0; font: 700 17px/1.2 var(--mono); letter-spacing: -.02em; }
+.subtitle { margin: 4px 0 0; color: var(--ink-3); font: 500 11px/1.3 var(--mono); }
+.snapshot { color: var(--ink-2); font: 500 11px/1.5 var(--mono); text-align: right; }
+.controls { display: flex; gap: 8px; align-items: center; }
+select.theme-picker, button.refresh {
+  appearance: none; padding: 8px 12px; border: 1px solid var(--line-strong);
+  border-radius: var(--radius); background: var(--panel); color: var(--ink);
+  font: 600 11px var(--mono); cursor: pointer; box-shadow: var(--panel-shadow);
+}
+button.refresh:disabled { opacity: .55; cursor: wait; }
+
+.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+           margin-top: 16px; }
+.summary-item { display: flex; align-items: center; justify-content: space-between;
+                gap: 10px; min-height: 64px; padding: 12px 14px;
+                border: 1px solid var(--line); border-radius: var(--radius);
+                background: var(--panel); box-shadow: var(--panel-shadow); }
+.summary-label { display: block; color: var(--ink-3); font: 700 9px/1.3 var(--mono);
+                 letter-spacing: .1em; text-transform: uppercase; }
+.summary-note { margin: 3px 0 0; color: var(--ink-2); font: 400 10px/1.3 var(--mono); }
+.summary-value { font: 700 22px/1 var(--mono); }
+
+.provider { margin-top: 26px; }
+.provider-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 8px; }
+.provider-name { margin: 0; font: 700 13px/1.2 var(--mono); letter-spacing: .06em;
+                 text-transform: uppercase; }
+.provider-count { color: var(--ink-3); font: 500 10px var(--mono); }
+
+.account { display: grid;
+           grid-template-columns: minmax(190px, 1.1fr) repeat(var(--win-cols, 2), minmax(150px, 1fr)) minmax(120px, .7fr);
+           gap: 16px; padding: 15px 16px; margin-top: 8px;
+           border: 1px solid var(--line); border-radius: var(--radius);
+           background: var(--panel); box-shadow: var(--panel-shadow); }
+.account.is-held { opacity: .75; }
+.acct-email { display: block; font: 600 12px/1.35 var(--mono); word-break: break-all; }
+.acct-meta { margin-top: 5px; color: var(--ink-3); font: 500 9.5px/1.5 var(--mono); }
+.acct-meta span { display: inline-block; margin-right: 10px; }
+
+.win-name { color: var(--ink-2); font: 700 9px/1.3 var(--mono);
+            letter-spacing: .09em; text-transform: uppercase; }
+.win-value { float: right; font: 700 11px/1.3 var(--mono); }
+.meter { display: grid; grid-template-columns: repeat(10, 1fr); gap: var(--cell-gap);
+         height: var(--meter-height); margin-top: 7px; }
+.cell { position: relative; border-radius: var(--cell-radius); background: var(--cell-bg);
+        overflow: hidden; }
+.cell::after { content: ""; position: absolute; inset: 0; width: var(--fill, 0%);
+               background: var(--tone, var(--unknown));
+               box-shadow: var(--cell-glow) var(--tone, transparent); }
+.win-note { margin: 6px 0 0; color: var(--ink-3); font: 400 9px/1.4 var(--mono); }
+.tone-green { --tone: var(--green); } .tone-yellow { --tone: var(--yellow); }
+.tone-orange { --tone: var(--orange); } .tone-red { --tone: var(--red); }
+.tone-unknown { --tone: var(--unknown); }
+.win-value.tone-green { color: var(--green); } .win-value.tone-yellow { color: var(--yellow); }
+.win-value.tone-orange { color: var(--orange); } .win-value.tone-red { color: var(--red); }
+
+.state { text-align: right; }
+.state-badge { display: inline-flex; align-items: center; gap: 7px;
+               font: 700 9.5px/1.3 var(--mono); letter-spacing: .09em;
+               text-transform: uppercase; }
+.live-dot { position: relative; width: 7px; height: 7px; border-radius: 50%;
+            background: var(--green); }
+.live-dot::after { content: ""; position: absolute; inset: -4px;
+                   border: 1px solid var(--green); border-radius: 50%; }
+.state-note { margin: 6px 0 0; color: var(--ink-3); font: 400 9px/1.45 var(--mono); }
+
+.statusline { margin-top: 14px; color: var(--ink-2); font: 500 10px/1.5 var(--mono); }
+.statusline.is-error { color: var(--red); }
+.empty { margin-top: 14px; padding: 36px 18px; border: 1px solid var(--line);
+         border-radius: var(--radius); background: var(--panel); text-align: center;
+         font: 600 12px/1.6 var(--mono); }
+.empty small { display: block; margin-top: 6px; color: var(--ink-3);
+               font-size: 9.5px; font-weight: 400; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 22px;
+          padding-top: 14px; border-top: 1px solid var(--line);
+          color: var(--ink-3); font: 500 9px/1.4 var(--mono);
+          text-transform: uppercase; letter-spacing: .05em; }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 16px; height: 5px; border-radius: 2px; background: var(--tone); }
+.credit { margin-top: 26px; color: var(--ink-3); font: 500 9px var(--mono); }
+.credit a { color: var(--ink-2); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .live-dot::after { animation: pulse 1.8s ease-out infinite; }
+  @keyframes pulse { from { opacity: .6; transform: scale(.6); }
+                     to { opacity: 0; transform: scale(1.6); } }
+}
+@media (max-width: 860px) {
+  .summary { grid-template-columns: 1fr 1fr; }
+  .account { grid-template-columns: 1fr 1fr; }
+  .acct-identity { grid-column: 1 / -1; }
+  .state { grid-column: 1 / -1; text-align: left; }
+}
+@media (max-width: 560px) {
+  .shell { width: min(100% - 24px, 1280px); }
+  .account { grid-template-columns: 1fr; }
+  .toolbar { align-items: flex-start; }
+  .snapshot { text-align: left; }
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="toolbar">
+    <div class="brand">
+      <h1 class="title" id="title">headroom</h1>
+      <p class="subtitle" id="subtitle">Remaining capacity across your AI subscriptions</p>
+    </div>
+    <p class="snapshot"><span id="snapshot-age">Connecting…</span><br>
+      <span id="source-line">live usage feed</span></p>
+    <div class="controls">
+      <select class="theme-picker" id="theme" aria-label="Dashboard theme">
+        <option value="midnight">Midnight</option>
+        <option value="minimal">Minimal</option>
+        <option value="chrome">Chrome</option>
+        <option value="paper">Paper</option>
+        <option value="terminal">Terminal</option>
+      </select>
+      <button class="refresh" id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <section class="summary" aria-label="Fleet summary">
+    <div class="summary-item"><div><span class="summary-label">Verified</span>
+      <p class="summary-note">provider state known</p></div>
+      <strong class="summary-value" id="verified">–</strong></div>
+    <div class="summary-item"><div><span class="summary-label">Average left</span>
+      <p class="summary-note">all current windows</p></div>
+      <strong class="summary-value" id="average">–</strong></div>
+    <div class="summary-item"><div><span class="summary-label">Lowest tank</span>
+      <p class="summary-note" id="lowest-account">waiting for data</p></div>
+      <strong class="summary-value" id="lowest">–</strong></div>
+    <div class="summary-item"><div><span class="summary-label">Accounts</span>
+      <p class="summary-note" id="account-note">–</p></div>
+      <strong class="summary-value" id="account-count">–</strong></div>
+  </section>
+
+  <div class="statusline" id="status" aria-live="polite">Loading usage readings…</div>
+  <div id="providers" aria-live="polite"></div>
+
+  <footer class="legend" aria-label="Capacity colours">
+    <span class="legend-item tone-green"><span class="swatch"></span>51–100% left</span>
+    <span class="legend-item tone-yellow"><span class="swatch"></span>31–50% left</span>
+    <span class="legend-item tone-orange"><span class="swatch"></span>11–30% left</span>
+    <span class="legend-item tone-red"><span class="swatch"></span>0–10% left</span>
+    <span class="legend-item tone-unknown"><span class="swatch"></span>unknown</span>
+  </footer>
+  <p class="credit">tracked by <a href="https://github.com/pauldomanski/headroom">headroom</a> —
+    usage read straight from your providers, no tokens spent</p>
+</main>
+
+<script>
+"use strict";
+const CONFIG = /*__HEADROOM_CONFIG__*/ null;
+const DATA_URL = "usage.json";
+let requestNumber = 0;
+
+/* ------------------------------------------------------------- helpers */
+function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function clamp(v,lo,hi){return Math.min(hi,Math.max(lo,v));}
+function capacity(w){return w&&Number.isFinite(w.used_percent)?clamp(100-w.used_percent,0,100):null;}
+function tone(left){if(left==null)return"unknown";if(left<=10)return"red";if(left<=30)return"orange";if(left<=50)return"yellow";return"green";}
+function age(epoch){if(!Number.isFinite(epoch))return"time unknown";const s=Math.max(0,Math.floor(Date.now()/1e3-epoch));if(s<60)return s+"s ago";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h "+Math.floor(s%3600/60)+"m ago";return Math.floor(s/86400)+"d ago";}
+function untilReset(epoch){if(!Number.isFinite(epoch))return"reset not reported";const s=epoch-Math.floor(Date.now()/1e3);if(s<=0)return"reset due";if(s<86400){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return"resets in "+(h?h+"h ":"")+m+"m";}return"resets "+new Intl.DateTimeFormat(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(1e3*epoch));}
+function isCurrent(a){return Boolean(a&&a.ok===true&&a.routable===true&&a.stale!==true);}
+
+function windowLabel(key){
+  if(key==="5h")return"Session 5h";
+  if(key==="7d")return"Weekly all";
+  if(key.startsWith("scoped:"))return"Weekly "+key.slice(7);
+  return key;
+}
+function windowColumns(accounts){
+  const keys=["5h","7d"];
+  accounts.forEach(a=>Object.keys(a.windows||{}).forEach(k=>{
+    if(k.startsWith("scoped:")&&!keys.includes(k))keys.push(k);}));
+  return keys;
+}
+
+/* -------------------------------------------------------------- render */
+function meterMarkup(left){
+  let cells="";
+  for(let i=0;i<10;i++){
+    const fill=left==null?0:clamp((left-10*i)*10,0,100);
+    cells+='<span class="cell" style="--fill:'+fill+'%"></span>';
+  }
+  return '<div class="meter tone-'+tone(left)+'" role="img" aria-label="'+(left==null?"unknown":Math.round(left)+"% remaining")+'">'+cells+"</div>";
+}
+function windowMarkup(account,key){
+  const w=(account.windows||{})[key]||null;
+  const left=capacity(w);
+  const unknown=left==null;
+  const value=unknown?"n/a":Math.round(left)+"% left";
+  const note=unknown?(w?"reading unavailable":(key.startsWith("scoped:")?"no scoped cap":"no reading yet")):untilReset(w.resets_at);
+  return '<div class="win"><span class="win-name">'+esc(windowLabel(key))+
+    '</span><span class="win-value tone-'+tone(left)+'">'+esc(value)+"</span>"+
+    meterMarkup(left)+'<p class="win-note">'+esc(note)+"</p></div>";
+}
+function accountMarkup(account,columns){
+  const current=isCurrent(account);
+  const state=current?"Live":account.stale?"Stale":"Held";
+  const note=current?"observed "+age(account.captured_at)
+    :(account.note||account.error_code||"no verified reading");
+  const dot=current?'<span class="live-dot" aria-hidden="true"></span>':"";
+  return '<article class="account '+(current?"is-live":"is-held")+'" style="--win-cols:'+columns.length+'">'+
+    '<div class="acct-identity"><span class="acct-email">'+esc(account.email||account.name)+"</span>"+
+    '<div class="acct-meta"><span>'+esc(account.name)+"</span><span>"+esc(account.plan||account.provider)+"</span></div></div>"+
+    columns.map(k=>windowMarkup(account,k)).join("")+
+    '<div class="state"><span class="state-badge">'+dot+state+"</span>"+
+    '<p class="state-note">'+esc(note)+"</p></div></article>";
+}
+function providerMarkup(provider,accounts){
+  if(!accounts.length)return"";
+  const columns=windowColumns(accounts);
+  const title=provider==="claude"?"Claude":"Codex";
+  return '<section class="provider"><header class="provider-head">'+
+    '<h2 class="provider-name">'+title+'</h2><span class="provider-count">'+
+    accounts.length+(accounts.length===1?" subscription":" subscriptions")+"</span></header>"+
+    accounts.map(a=>accountMarkup(a,columns)).join("")+"</section>";
+}
+function validate(data){
+  if(!data||!Number.isFinite(data.generated)||!Array.isArray(data.accounts))
+    throw new Error("usage snapshot invalid");
+  data.accounts.forEach(a=>{
+    if(!a||typeof a.name!=="string")throw new Error("invalid account record");
+    Object.values(a.windows||{}).forEach(w=>{
+      if(w&&w.used_percent!=null&&(!Number.isFinite(w.used_percent)||w.used_percent<0||w.used_percent>100))
+        throw new Error("invalid usage percentage");});});
+  return data;
+}
+function render(data){
+  const accounts=data.accounts;
+  const current=accounts.filter(isCurrent);
+  const readings=[];
+  current.forEach(a=>Object.entries(a.windows||{}).forEach(([k,w])=>{
+    const left=capacity(w);if(left!=null&&(k==="5h"||k==="7d"))readings.push({left,who:a.email||a.name});}));
+  const avg=readings.length?Math.round(readings.reduce((s,r)=>s+r.left,0)/readings.length):null;
+  const lowest=readings.length?readings.reduce((b,r)=>r.left<b.left?r:b):null;
+  const claude=accounts.filter(a=>a.provider==="claude");
+  const codex=accounts.filter(a=>a.provider==="codex");
+  set("verified",current.length+"/"+accounts.length);
+  set("average",avg==null?"n/a":avg+"%");
+  set("lowest",lowest?Math.round(lowest.left)+"%":"n/a");
+  set("lowest-account",lowest?lowest.who:"no current readings");
+  set("account-count",String(accounts.length));
+  set("account-note",(claude.length?("Claude "+claude.length):"")+(claude.length&&codex.length?" · ":"")+(codex.length?("Codex "+codex.length):""));
+  set("snapshot-age","snapshot "+age(data.generated));
+  set("source-line",current.length+" of "+accounts.length+" verified");
+  document.getElementById("providers").innerHTML=
+    providerMarkup("claude",claude)+providerMarkup("codex",codex);
+  const warnings=(data.integrity_warnings||[]);
+  const status=document.getElementById("status");
+  status.textContent=warnings.length?("⚠ "+warnings.join(" — ")):"Full meters are available capacity. Colors show what's left, not what's used.";
+  status.className="statusline"+(warnings.length?" is-error":"");
+}
+function renderError(message){
+  document.getElementById("providers").innerHTML=
+    '<div class="empty">Usage feed unavailable<small>'+esc(message)+
+    " — no stale value promoted to live.</small></div>";
+  set("snapshot-age","no trustworthy snapshot");
+  set("source-line","refresh to retry");
+  const status=document.getElementById("status");
+  status.textContent="Live data could not be verified.";
+  status.className="statusline is-error";
+}
+function set(id,text){document.getElementById(id).textContent=text;}
+
+/* ---------------------------------------------------------------- load */
+async function load(manual){
+  const requestId=++requestNumber;
+  const button=document.getElementById("refresh");
+  if(manual){button.disabled=true;button.textContent="Refreshing…";}
+  try{
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),12e3);
+    const response=await fetch(DATA_URL+"?t="+Date.now(),{cache:"no-store",signal:controller.signal});
+    clearTimeout(timer);
+    if(!response.ok)throw new Error("feed returned HTTP "+response.status);
+    const data=validate(await response.json());
+    if(requestId===requestNumber){
+      render(data);
+      try{localStorage.setItem("headroom-cache",JSON.stringify(data));}catch(e){}
+    }
+  }catch(error){
+    if(requestId===requestNumber){
+      let cached=null;
+      try{cached=JSON.parse(localStorage.getItem("headroom-cache")||"null");}catch(e){}
+      if(cached){render(cached);
+        const status=document.getElementById("status");
+        status.textContent="Feed unreachable ("+(error&&error.message||"error")+"). Showing last snapshot.";
+        status.className="statusline is-error";}
+      else renderError(error&&error.message?error.message:"unknown feed error");
+    }
+  }finally{
+    if(manual&&requestId===requestNumber){button.disabled=false;button.textContent="Refresh";}
+  }
+}
+
+/* --------------------------------------------------------------- theme */
+const picker=document.getElementById("theme");
+function applyTheme(name){
+  document.documentElement.setAttribute("data-theme",name);
+  picker.value=name;
+  try{localStorage.setItem("headroom-theme",name);}catch(e){}
+}
+picker.addEventListener("change",()=>applyTheme(picker.value));
+(function init(){
+  const configured=CONFIG&&CONFIG.theme;
+  let stored=null;
+  try{stored=localStorage.getItem("headroom-theme");}catch(e){}
+  const params=new URLSearchParams(location.search);
+  applyTheme(params.get("theme")||stored||configured||"midnight");
+  if(CONFIG&&CONFIG.title){set("title",CONFIG.title);document.title=CONFIG.title;}
+  document.getElementById("refresh").addEventListener("click",()=>load(true));
+  load(false);
+  setInterval(()=>load(false),6e4);
+})();
+</script>
+</body>
+</html>

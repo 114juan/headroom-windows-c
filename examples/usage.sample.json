@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "run_id": "sample",
+  "generated": 0,
+  "generated_iso": "1970-01-01T00:00:00Z",
+  "integrity_warnings": [],
+  "accounts": [
+    {
+      "name": "personal", "email": "alex@fastmail.com", "provider": "claude",
+      "plan": "Max 20x", "ok": true, "stale": false, "routable": true,
+      "trust_state": "verified", "identity_verified": true,
+      "identity_method": "claude_auth_status", "captured_at": 0,
+      "source": "anthropic_usage_api",
+      "windows": {
+        "5h": {"used_percent": 12.0, "resets_at": 0, "window_minutes": 300},
+        "7d": {"used_percent": 38.0, "resets_at": 0, "window_minutes": 10080},
+        "scoped:Opus": {"used_percent": 61.0, "resets_at": 0, "window_minutes": 10080}
+      }
+    },
+    {
+      "name": "work", "email": "alex@studio.dev", "provider": "claude",
+      "plan": "Max 5x", "ok": true, "stale": false, "routable": true,
+      "trust_state": "verified", "identity_verified": true,
+      "identity_method": "claude_auth_status", "captured_at": 0,
+      "source": "anthropic_usage_api",
+      "windows": {
+        "5h": {"used_percent": 64.0, "resets_at": 0, "window_minutes": 300},
+        "7d": {"used_percent": 47.0, "resets_at": 0, "window_minutes": 10080},
+        "scoped:Opus": {"used_percent": 88.0, "resets_at": 0, "window_minutes": 10080}
+      }
+    },
+    {
+      "name": "side-project", "email": "alex.dev@gmail.com", "provider": "claude",
+      "plan": "Pro", "ok": true, "stale": false, "routable": true,
+      "trust_state": "verified", "identity_verified": true,
+      "identity_method": "claude_auth_status", "captured_at": 0,
+      "source": "anthropic_usage_api",
+      "windows": {
+        "5h": {"used_percent": 96.0, "resets_at": 0, "window_minutes": 300},
+        "7d": {"used_percent": 71.0, "resets_at": 0, "window_minutes": 10080}
+      }
+    },
+    {
+      "name": "codex-main", "email": "alex@studio.dev", "provider": "codex",
+      "plan": "ChatGPT Pro", "ok": true, "stale": false, "routable": true,
+      "trust_state": "verified", "identity_verified": true,
+      "identity_method": "openai_userinfo", "captured_at": 0,
+      "source": "codex_session_telemetry",
+      "subscription": {"status": "active_through", "active_until": 0,
+                       "checked_at": 0, "source": "openai_id_token_claim"},
+      "windows": {
+        "5h": {"used_percent": 33.0, "resets_at": 0, "window_minutes": 300,
+                "observed_at": 0, "freshness": "fresh"},
+        "7d": {"used_percent": 18.0, "resets_at": 0, "window_minutes": 10080,
+                "observed_at": 0, "freshness": "fresh"}
+      }
+    },
+    {
+      "name": "codex-alt", "email": "alex.dev@gmail.com", "provider": "codex",
+      "plan": "ChatGPT Plus", "ok": false, "stale": false, "routable": false,
+      "trust_state": "held", "identity_verified": true,
+      "identity_method": "openai_local_id_token", "captured_at": 0,
+      "source": "codex_session_telemetry",
+      "note": "no Codex telemetry yet — run one Codex turn on this account",
+      "windows": {}
+    }
+  ]
+}
