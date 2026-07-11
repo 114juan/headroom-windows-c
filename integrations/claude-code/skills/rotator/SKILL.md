@@ -1,6 +1,6 @@
 ---
 name: rotator
-description: "Rotate to the AI account with the most headroom when a usage limit hits. Triggers: /rotator, rotate the account, hit my session limit, hit the weekly limit, out of usage, switch account, no headroom left, which account has capacity. Uses the headroom CLI to pick the best connected login and cool the exhausted one down until its window resets."
+description: "Rotate to the next connected account with proven headroom when a usage limit hits. Triggers: /rotator, rotate the account, hit my session limit, hit the weekly limit, out of usage, switch account, no headroom left, which account has capacity. Uses the headroom CLI to pick the next eligible login in your configured preference order and cool the exhausted one down until its window resets."
 ---
 
 # rotator

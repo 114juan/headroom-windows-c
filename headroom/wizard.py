@@ -57,8 +57,10 @@ def run_setup():
             try:
                 os.replace(config_file, backup)
                 print(f"backed the corrupt config up to {backup}")
-            except OSError:
-                pass
+            except OSError as error:
+                print(f"could not back up the corrupt config ({error}); "
+                      "aborting rather than risk losing it.")
+                return 1
             config = {}
         config.setdefault("schema_version", 1)
         config.setdefault("accounts", [])

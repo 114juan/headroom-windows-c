@@ -4,8 +4,9 @@ Two plug-ins, both optional, both 30-second installs.
 
 ## 1. Live headroom in your status line
 
-Shows the account your session is running on with color-coded 5h/7d capacity,
-and who the rotator would pick next when you're running low:
+Shows the account your session is running on with its color-coded 5h/7d usage
+(percent *used*, green→red as it fills), and who the rotator would pick next
+when you're running low:
 
 ```
 work · 5h 82% · 7d 47% · next: personal

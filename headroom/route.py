@@ -163,13 +163,17 @@ def block_reason(account, fam, snapshot_row, cool, now):
     if not snap_fp:
         # a routable snapshot with no bound identity can't be re-verified; hold
         return "snapshot has no bound identity — recollect"
+    if not snap_digest:
+        # require the credential binding too — a routable Claude row always has
+        # one; its absence means stale/pre-binding state, so hold
+        return "snapshot has no credential binding — recollect"
     current_fp, current_digest = collector.local_binding(account["provider"],
                                                          account["home"])
     if current_fp is None:
         return "cannot verify slot identity — recollect"
     if current_fp != snap_fp:
         return "slot identity changed since snapshot — recollect"
-    if snap_digest and current_digest != snap_digest:
+    if current_digest != snap_digest:
         # the actual credential token the CLI will use has changed
         return "slot credential changed since snapshot — recollect"
     if snapshot_row.get("stale"):
@@ -179,7 +183,9 @@ def block_reason(account, fam, snapshot_row, cool, now):
         return "reading clock invalid"
     if now - captured_at > OBSERVATION_MAX_AGE:
         return "reading expired"
-    windows = snapshot_row.get("windows") or {}
+    windows = snapshot_row.get("windows")
+    if not isinstance(windows, dict):
+        return "windows invalid"
     for key in ("5h", "7d"):
         window = windows.get(key)
         if not isinstance(window, dict):
@@ -388,12 +394,18 @@ def cmd_exec(fam, command):
               f"try `headroom status {fam}`", file=sys.stderr)
         return 2
     # final recheck against the latest cooldown ledger right before exec, in
-    # case another process cooled this account since pick()
+    # case another process cooled this account since pick(). NEVER fall back to
+    # a held account — re-pick, and refuse to launch if nothing is eligible.
     if registry.family_provider(fam) == "claude" or CODEX_ROUTING_ENABLED:
         snapshot = ensure_fresh_snapshot()
         row = _snapshot_accounts(snapshot).get(account["name"])
         if block_reason(account, fam, row, cooldowns(), time.time()):
-            account = pick(fam) or account
+            account = pick(fam)
+            if account is None:
+                print("[headroom] the chosen account was just held and no "
+                      "other has proven headroom — try again in a moment",
+                      file=sys.stderr)
+                return 2
     for var in collector.AUTH_OVERRIDE_VARS:
         os.environ.pop(var, None)
     os.environ[env_key(account)] = account["home"]

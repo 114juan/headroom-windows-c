@@ -149,6 +149,16 @@ class BlockReasonFailClosed(unittest.TestCase):
         row.pop("identity")
         self.assertIsNotNone(self.reason(row))
 
+    def test_no_credential_digest_holds(self):
+        row = _claude_row()
+        row["identity"] = {"account_fingerprint": "AAAA"}  # no credential_digest
+        self.assertIsNotNone(self.reason(row))
+
+    def test_non_dict_windows_holds(self):
+        row = _claude_row()
+        row["windows"] = ["not", "a", "dict"]
+        self.assertIsNotNone(self.reason(row))
+
     def test_generic_claude_not_blocked_by_opus_cap(self):
         row = _claude_row()
         row["windows"]["scoped:Opus"] = {"used_percent": 100.0,
