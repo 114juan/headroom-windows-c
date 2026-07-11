@@ -455,11 +455,16 @@ async function load(manual){
     if(requestId===requestNumber){
       let cached=null;
       try{cached=JSON.parse(localStorage.getItem("headroom-cache")||"null");}catch(e){}
-      if(cached){render(cached);
+      // Only reuse a RECENT cache. An old cache may predate a privacy change
+      // (emails since redacted) or a limit that has since changed; beyond an
+      // hour we refuse it rather than resurface stale data as a snapshot.
+      const cacheAge=cached&&Number.isFinite(cached.generated)?(Date.now()/1e3-cached.generated):Infinity;
+      if(cached&&cacheAge<=3600){render(cached);
         const status=document.getElementById("status");
-        status.textContent="Feed unreachable ("+(error&&error.message||"error")+"). Showing last snapshot.";
+        status.textContent="Feed unreachable ("+(error&&error.message||"error")+"). Showing last snapshot ("+age(cached.generated)+").";
         status.className="statusline is-error";}
-      else renderError(error&&error.message?error.message:"unknown feed error");
+      else{try{localStorage.removeItem("headroom-cache");}catch(e){}
+        renderError(error&&error.message?error.message:"unknown feed error");}
     }
   }finally{
     if(manual&&requestId===requestNumber){button.disabled=false;button.textContent="Refresh";}

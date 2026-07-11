@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # headroom installer: symlink bin/headroom onto the PATH. No pip, no sudo
 # needed when ~/.local/bin exists (it's on PATH by default on modern systems).
+
+# Guard: this script uses bash features (BASH_SOURCE). Running it under
+# sh/dash silently mis-resolves paths, so refuse rather than half-install.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "please run with bash:  bash install.sh" >&2
+  exit 1
+fi
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

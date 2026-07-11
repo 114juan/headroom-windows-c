@@ -103,11 +103,14 @@ def validate(config):
 
 
 def load():
-    config = paths.load_json(paths.config_path())
+    path = paths.config_path()
+    if not os.path.exists(path):
+        raise RegistryError(f"no config at {path}; run `headroom setup` first")
+    config = paths.load_json(path)
     if config is None:
         raise RegistryError(
-            f"no config at {paths.config_path()}; run `headroom setup` first"
-        )
+            f"config at {path} exists but is unreadable or not valid JSON; "
+            f"fix or delete it, then run `headroom setup`")
     return validate(config)
 
 

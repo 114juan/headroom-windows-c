@@ -9,7 +9,9 @@ stale, out of range, at 100%, or inside a cooldown from a previous limit-hit.
 limit errors; on a hit it cools that account down until the relevant window
 resets and retries the next candidate.
 """
+import contextlib
 import datetime
+import fcntl
 import json
 import math
 import os
@@ -45,7 +47,7 @@ def tfmt(epoch):
         return str(epoch)
 
 
-def cooldowns():
+def _read_cooldowns():
     """{} when no ledger exists; None when a ledger exists but is unreadable —
     corrupt protective state must HOLD routing, not silently clear it."""
     path = paths.cooldowns_path()
@@ -59,8 +61,27 @@ def cooldowns():
     return value if isinstance(value, dict) else None
 
 
+def cooldowns():
+    return _read_cooldowns()
+
+
 def save_cooldowns(value):
     paths.write_json_atomic(paths.cooldowns_path(), value)
+
+
+@contextlib.contextmanager
+def _cooldown_lock():
+    """Exclusive lock so concurrent mark()/clear() can't clobber each other's
+    limits (a lost cooldown routes an exhausted account = fail-open)."""
+    lock_path = paths.cooldowns_path() + ".lock"
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    handle = open(lock_path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
 
 
 def _snapshot_fresh(snapshot, now, max_age):
@@ -123,7 +144,12 @@ def block_reason(account, fam, snapshot_row, cool, now):
             return f"{key} window missing"
         percent = window.get("used_percent")
         if window.get("freshness") == "expired_observation":
-            continue
+            # only trust "expired" if the window has genuinely reset; a future
+            # reset with no reading is unproven capacity, so hold.
+            reset = window.get("resets_at")
+            if _number(reset) and reset <= now:
+                continue
+            return f"{key} reading expired but window not reset"
         if not _number(percent) or not 0 <= percent <= 100:
             return f"{key} reading invalid"
         if percent >= 100:
@@ -135,15 +161,27 @@ def block_reason(account, fam, snapshot_row, cool, now):
             and scoped["used_percent"] >= 100:
         return f"{fam} weekly cap at 100%"
     for key in (f"{account['name']}:{fam}", f"{account['name']}:*"):
+        if key not in cool:
+            continue
         cooldown = cool.get(key)
-        if _number(cooldown) and now < cooldown:
+        if not _number(cooldown):
+            # a present-but-unreadable cooldown value is corrupt protective
+            # state — hold, don't silently ignore it (fail-closed).
+            return "cooldown entry unreadable — inspect state/cooldowns.json"
+        if now < cooldown:
             return f"cooldown until {tfmt(cooldown)}"
     return None
 
 
-def candidates(fam, snapshot=None):
-    """[(account, reason-or-None), ...] in preference order."""
-    snapshot = ensure_fresh_snapshot() if snapshot is None else snapshot
+_UNSET = object()
+
+
+def candidates(fam, snapshot=_UNSET):
+    """[(account, reason-or-None), ...] in preference order. Pass an explicit
+    snapshot (possibly None, meaning 'already collected and it failed') to
+    avoid re-triggering collection; omit it to collect once here."""
+    if snapshot is _UNSET:
+        snapshot = ensure_fresh_snapshot()
     rows = _snapshot_accounts(snapshot)
     cool = cooldowns()
     now = time.time()
@@ -169,30 +207,34 @@ def env_key(account):
     return "CLAUDE_CONFIG_DIR" if account["provider"] == "claude" else "CODEX_HOME"
 
 
-def mark(name, fam, epoch=None, account_wide=False):
+def mark(name, fam, epoch=None, account_wide=False, window="5h"):
     """Cool an account down. Session/weekly-all limits are account-wide
     (fam='*'); only genuine model-scoped caps cool a single family.
-    A reset in the past is useless — clamp to a conservative future floor."""
-    cool = cooldowns()
-    if cool is None:
-        raise RuntimeError(
-            "cooldown ledger unreadable — inspect/delete state/cooldowns.json")
+    A reset in the past is useless — clamp to a window-aware future floor
+    (a weekly cap must never collapse to a session-length cooldown).
+    Locked read-modify-write so a concurrent mark can't drop this limit."""
     now = time.time()
-    floor = now + 15 * 60
+    floor = now + (6 * 3600 if window == "7d" else 15 * 60)
     epoch = (now + 5 * 3600) if epoch is None else max(float(epoch), floor)
     key = f"{name}:{'*' if account_wide else fam}"
-    cool[key] = epoch
-    save_cooldowns(cool)
+    with _cooldown_lock():
+        cool = _read_cooldowns()
+        if cool is None:
+            raise RuntimeError(
+                "cooldown ledger unreadable — inspect/delete state/cooldowns.json")
+        cool[key] = epoch
+        save_cooldowns(cool)
     return epoch
 
 
 def clear(key=None):
-    if key is None:
-        save_cooldowns({})
-    else:
-        cool = cooldowns() or {}
-        cool.pop(key, None)
-        save_cooldowns(cool)
+    with _cooldown_lock():
+        if key is None:
+            save_cooldowns({})
+        else:
+            cool = _read_cooldowns() or {}
+            cool.pop(key, None)
+            save_cooldowns(cool)
 
 
 def window_reset(snapshot, name, window_key):
@@ -231,8 +273,12 @@ def cmd_run(fam, command):
         environment = collector.scrubbed_env()
         environment[env_key(account)] = account["home"]
         print(f"[headroom] running on {account['name']}", file=sys.stderr)
-        process = subprocess.run(command, env=environment,
-                                 capture_output=True, text=True)
+        try:
+            process = subprocess.run(command, env=environment,
+                                     capture_output=True, text=True)
+        except OSError as error:
+            print(f"[headroom] cannot run {command[0]}: {error}", file=sys.stderr)
+            return 127
         # Rotation replays the command on the next account, so it is only
         # safe for idempotent commands (documented) and only fires on a
         # FAILED run whose stderr shows a provider limit — matching stdout
@@ -243,7 +289,7 @@ def cmd_run(fam, command):
             window_key = "7d" if WEEKLY_RE.search(process.stderr or "") else "5h"
             reset = window_reset(snapshot, account["name"], window_key) \
                 or time.time() + (7 * 86400 if window_key == "7d" else 5 * 3600)
-            mark(account["name"], fam, reset, account_wide=True)
+            mark(account["name"], fam, reset, account_wide=True, window=window_key)
             print(f"[headroom] {account['name']} hit its {window_key} limit -> "
                   f"cooled until {tfmt(reset)}; rotating", file=sys.stderr)
             continue

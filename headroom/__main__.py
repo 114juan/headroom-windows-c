@@ -31,9 +31,17 @@ def main(argv=None):
     except registry.RegistryError as error:
         print(f"headroom: {error}", file=sys.stderr)
         return 1
+    except ValueError as error:
+        # e.g. a relative HEADROOM_DIR — a config problem, not a crash
+        print(f"headroom: {error}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         print()
         return 130
+    except EOFError:
+        print("\nheadroom: this command needs an interactive terminal "
+              "(no input available on stdin).", file=sys.stderr)
+        return 1
 
 
 def _dispatch(argv):
@@ -93,13 +101,28 @@ def _dispatch(argv):
         from . import route
         return route.cmd_rotate(registry.family(args[0] if args else "claude"))
     if command == "mark":
+        import time
+
         from . import route
         if len(args) < 2:
-            print("usage: headroom mark <name> <model> [epoch]", file=sys.stderr)
+            print("usage: headroom mark <name> <model> [epoch-unix-timestamp]",
+                  file=sys.stderr)
             return 2
-        import time
-        epoch = float(args[2]) if len(args) > 2 else time.time() + 5 * 3600
-        route.mark(args[0], registry.family(args[1]), epoch)
+        known = {account["name"] for account in registry.accounts()}
+        if args[0] not in known:
+            print(f"headroom: no connected account named {args[0]!r} "
+                  f"(have: {', '.join(sorted(known)) or 'none'})", file=sys.stderr)
+            return 2
+        if len(args) > 2:
+            try:
+                epoch = float(args[2])
+            except ValueError:
+                print("usage: headroom mark <name> <model> "
+                      "[epoch-unix-timestamp]", file=sys.stderr)
+                return 2
+        else:
+            epoch = time.time() + 5 * 3600
+        epoch = route.mark(args[0], registry.family(args[1]), epoch)
         print(f"cooled {args[0]}:{registry.family(args[1])} "
               f"until {route.tfmt(epoch)}")
         return 0

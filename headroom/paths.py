@@ -15,9 +15,14 @@ import tempfile
 
 def base_dir():
     raw = os.environ.get("HEADROOM_DIR") or "~/.headroom"
-    # normalize once: a relative HEADROOM_DIR must never scatter credentials
-    # and state into whatever directory the command happens to run from
-    return os.path.abspath(os.path.expanduser(raw))
+    expanded = os.path.expanduser(raw)
+    # A relative HEADROOM_DIR would resolve against the current directory, so
+    # state/credentials would scatter per-cwd and the cooldown belt would be
+    # silently forgotten from a new directory. Refuse it rather than normalize.
+    if not os.path.isabs(expanded):
+        raise ValueError(
+            f"HEADROOM_DIR must be an absolute path (got {raw!r})")
+    return os.path.abspath(expanded)
 
 
 def ensure_private(directory):

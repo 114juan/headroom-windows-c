@@ -296,6 +296,10 @@ def claude_limits(home, expected_fingerprint, opener=open_authenticated):
         # The usage org can legitimately differ from the login's default org
         # (multi-org accounts), so binding is trust-on-first-use per slot:
         # the caller pins this fingerprint and holds the slot if it CHANGES.
+        # Once pinned, a response with NO org header can't be verified against
+        # the pin, so it must hold rather than silently accept.
+        if expected_fingerprint and not response_fingerprint:
+            raise IdentityBindingError("claude_usage_org_unverifiable")
         if (expected_fingerprint and response_fingerprint
                 and response_fingerprint != expected_fingerprint):
             raise IdentityBindingError("claude_usage_org_changed")
@@ -563,8 +567,10 @@ def collect(accounts, backoff=None, persist_backoff=None):
                               "account held — run `headroom connect` to re-login")
         except Exception as error:  # noqa: BLE001 — every account must report
             result["ok"] = False
+            # `error` is PRIVATE-only (may contain local paths / usernames).
+            # `note` is published, so it must stay generic.
             result["error"] = type(error).__name__ + ": " + str(error)[:120]
-            result["note"] = result["error"]
+            result["note"] = "collector error; see private snapshot for detail"
         snapshot["accounts"].append(result)
     snapshot["integrity_warnings"] = apply_integrity(snapshot["accounts"])
     completed = int(time.time())
@@ -576,8 +582,10 @@ def collect(accounts, backoff=None, persist_backoff=None):
 
 
 def redact_email(address):
-    if not address or "@" not in address:
+    if not address:
         return address
+    if "@" not in address:
+        return "***"  # redaction must never pass an unrecognized value through
     local, _, domain = address.partition("@")
     return (local[0] if local else "") + "***@" + domain
 
@@ -586,7 +594,8 @@ def public_snapshot(snapshot, redact_emails=False):
     accounts = []
     for account in snapshot["accounts"]:
         public = {k: v for k, v in account.items() if k in PUBLIC_FIELDS}
-        if account.get("error") and not public.get("note"):
+        if account.get("error"):
+            # never publish raw exception text, whatever `note` already holds
             public["note"] = "collector error; see private snapshot"
         if redact_emails:
             public["email"] = redact_email(public.get("email"))
