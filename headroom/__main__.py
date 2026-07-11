@@ -26,7 +26,17 @@ from . import __version__, registry
 
 
 def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
+    try:
+        return _dispatch(sys.argv[1:] if argv is None else argv)
+    except registry.RegistryError as error:
+        print(f"headroom: {error}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print()
+        return 130
+
+
+def _dispatch(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return 0

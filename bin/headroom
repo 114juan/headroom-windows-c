@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # headroom launcher — runs the package from the repo checkout, no install step.
 set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec python3 -c "import sys; sys.path.insert(0, '$REPO'); from headroom.__main__ import main; raise SystemExit(main())" "$@"
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do  # resolve symlinks (install.sh links from ~/.local/bin)
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HEADROOM_REPO="$(cd "$(dirname "$SOURCE")/.." && pwd)" \
+exec python3 -c 'import os, sys
+sys.path.insert(0, os.environ["HEADROOM_REPO"])
+from headroom.__main__ import main
+raise SystemExit(main())' "$@"
