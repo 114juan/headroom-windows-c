@@ -4,8 +4,16 @@
 
 headroom tracks the remaining capacity of every Claude and ChatGPT/Codex
 subscription you own — *without spending a single token* — puts it on a live
-dashboard you'll actually want to look at, and rotates your tools to the
-account with the most headroom the moment one hits a limit.
+dashboard you'll actually want to look at, and rotates your tools to the next
+account with headroom the moment one hits a limit.
+
+![headroom demo](marketing/headroom-demo.gif)
+
+Five built-in themes (Midnight, Minimal, Chrome, Paper, Terminal), switchable
+live from the dashboard. The setup wizard asks how you want it to look.
+
+<details>
+<summary>All five themes (static)</summary>
 
 | Midnight | Minimal |
 |---|---|
@@ -15,8 +23,7 @@ account with the most headroom the moment one hits a limit.
 |---|---|
 | ![chrome](marketing/hr-chrome.png) | ![terminal](marketing/hr-terminal.png) |
 
-Five built-in themes (Midnight, Minimal, Chrome, Paper, Terminal), switchable
-live from the dashboard. The setup wizard asks how you want it to look.
+</details>
 
 ## Why this exists
 
