@@ -20,6 +20,7 @@ usage:
   headroom serve [--open] [--port N] [--demo]   local live dashboard
   headroom statusline               Claude Code status line output
   headroom accounts                 list connected accounts
+  headroom share-history            share chats/history across all Claude accounts
   headroom doctor                   environment + config health check
   headroom graphify [args...]       run graphify codebase mapper on the project
 
@@ -229,6 +230,9 @@ def _dispatch(argv):
         except Exception as error:
             print(f"headroom: error running graphify: {error}", file=sys.stderr)
             return 1
+    if command == "share-history":
+        from . import history_sync
+        return history_sync.cmd_share_history()
     if command == "doctor":
         import platform
         import shutil
