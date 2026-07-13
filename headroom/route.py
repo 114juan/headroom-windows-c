@@ -411,8 +411,17 @@ def cmd_exec(fam, command):
     os.environ[env_key(account)] = account["home"]
     print(f"[headroom] {fam} -> {account['name']} ({account['home']})",
           file=sys.stderr)
+    import shutil
     try:
-        os.execvp(command[0], command)
+        if sys.platform == "win32":
+            # On Windows, os.execvp does not replace the process in-place (no execve syscall).
+            # It spawns a child and exits immediately, releasing the terminal back to the shell
+            # while the child is still running. We must use subprocess.call to block until finished.
+            resolved_exe = shutil.which(command[0]) or command[0]
+            use_shell = resolved_exe.lower().endswith((".cmd", ".bat", ".ps1"))
+            return subprocess.call(command, shell=use_shell)
+        else:
+            os.execvp(command[0], command)
     except FileNotFoundError:
         cli = "Claude Code" if command[0] == "claude" else "Codex"
         print(f"[headroom] `{command[0]}` not found on PATH — install the "
