@@ -21,6 +21,7 @@ usage:
   headroom statusline               Claude Code status line output
   headroom accounts                 list connected accounts
   headroom doctor                   environment + config health check
+  headroom graphify [args...]       run graphify codebase mapper on the project
 
 Try it with no accounts:  headroom serve --demo   (bundled sample data)
 """
@@ -218,6 +219,16 @@ def _dispatch(argv):
     if command == "statusline":
         from . import statusline
         return statusline.main()
+    if command == "graphify":
+        import subprocess
+        import shutil
+        exe = shutil.which("graphify")
+        cmd = [exe] if exe else [sys.executable, "-m", "graphify"]
+        try:
+            return subprocess.run(cmd + args).returncode
+        except Exception as error:
+            print(f"headroom: error running graphify: {error}", file=sys.stderr)
+            return 1
     if command == "doctor":
         import platform
         import shutil

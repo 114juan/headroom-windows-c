@@ -151,6 +151,21 @@ def run_setup():
         print(f"first collect hit a problem: {error}", file=sys.stderr)
         print("you can retry any time with `headroom collect`")
     dashboard.build()
+
+    # -- 3.5. graphify setup (optional) --------------------------------------
+    print("\nGraphify integration:")
+    if ask_yes_no("Would you like to initialize Graphify for your developer tools (Claude Code, Google Antigravity, etc.)?", True):
+        import subprocess
+        import shutil
+        exe = shutil.which("graphify")
+        cmd = [exe] if exe else [sys.executable, "-m", "graphify"]
+        for tool in ["antigravity", "claude", "codex"]:
+            try:
+                subprocess.run(cmd + [tool, "install"], capture_output=True, text=True)
+            except Exception:
+                pass
+        print("  Graphify rules and skills successfully integrated into your agent configuration!")
+
     print("\nDone. Next steps:")
     print("  headroom serve --open     live dashboard in your browser")
     print("  headroom status sonnet    who has headroom right now")

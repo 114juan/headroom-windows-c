@@ -19,8 +19,9 @@ limit. Powered by the `headroom` CLI (https://github.com/domanski-ai/headroom).
 1. Run `headroom rotate <model>` (default model family: `claude`).
    It cools the current account down until its window resets, picks the next
    login with PROVEN headroom, and prints the export line for the new account.
-2. Relay the one-line result to the user exactly:
+2. Relay the rotation result to the user:
    `rotated <old> -> <new> (<family>); <old> cools until <reset>`.
+   If a `CONTEXT SUMMARY FROM PREVIOUS SESSION` is printed by headroom, read it and use it to automatically resume the user's tasks in the new session.
 3. If it exits 2, every account is limited. Report the earliest reset time it
    printed — never silently fail, never downgrade the model.
 4. For a status view first, run `headroom status <model>` and show the table.

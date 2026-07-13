@@ -21,7 +21,7 @@ Fail-closed rules:
 """
 import base64
 import email.utils
-import fcntl
+from . import fcntl_compat as fcntl
 import glob
 import hashlib
 import json
@@ -159,7 +159,7 @@ def claude_local_identity(home):
     return {
         "verified": False,
         "email": email_address,
-        "account_fingerprint": fingerprint(org),
+        "account_fingerprint": fingerprint(f"{org}:{email_address}"),
         "method": "claude_local_metadata",
         "plan_type": None,
     }
@@ -235,7 +235,7 @@ def claude_identity(home, runner=subprocess.run):
                     return {
                         "verified": True,
                         "email": status.get("email"),
-                        "account_fingerprint": fingerprint(status.get("orgId")),
+                        "account_fingerprint": fingerprint(f"{status.get('orgId')}:{status.get('email')}"),
                         "method": "claude_auth_status",
                         "plan_type": status.get("subscriptionType"),
                     }

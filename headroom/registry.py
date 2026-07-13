@@ -20,7 +20,7 @@ Config shape (schema_version 1)::
     }
 """
 import contextlib
-import fcntl
+from . import fcntl_compat as fcntl
 import os
 import re
 

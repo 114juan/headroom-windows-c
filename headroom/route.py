@@ -11,7 +11,7 @@ resets and retries the next candidate.
 """
 import contextlib
 import datetime
-import fcntl
+from . import fcntl_compat as fcntl
 import json
 import math
 import os
@@ -438,6 +438,105 @@ def current_account(fam):
     return None
 
 
+def _parse_jsonl_messages(file_handle):
+    import json
+    messages = []
+    for line in file_handle:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            role = data.get("role") or data.get("type") or ""
+            text = data.get("text") or data.get("content") or data.get("message") or ""
+            if not text and "messages" in data:
+                msg_list = data["messages"]
+                if isinstance(msg_list, list) and msg_list:
+                    role = msg_list[-1].get("role") or role
+                    text = msg_list[-1].get("content") or text
+            if role and text:
+                if isinstance(text, str):
+                    text_summary = text[:250] + "..." if len(text) > 250 else text
+                    messages.append(f"{role.upper()}: {text_summary.strip()}")
+                elif isinstance(text, list):
+                    text_blocks = []
+                    for block in text:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_blocks.append(block.get("text", ""))
+                    merged_text = " ".join(text_blocks)
+                    text_summary = merged_text[:250] + "..." if len(merged_text) > 250 else merged_text
+                    messages.append(f"{role.upper()}: {text_summary.strip()}")
+        except Exception:
+            pass
+    if messages:
+        return "Recent messages from the previous session:\n" + "\n".join(messages[-8:])
+    return None
+
+
+def _extract_session_context(home_dir, provider):
+    """Finds the most recent Claude or Codex session context/history and returns a summary."""
+    try:
+        if provider == "claude":
+            projects_dir = os.path.join(home_dir, "projects")
+            if not os.path.isdir(projects_dir):
+                return None
+            latest_file = None
+            latest_mtime = 0
+            latest_is_summary = False
+            
+            for root, dirs, files in os.walk(projects_dir):
+                for f in files:
+                    if f == "summary.md" or f.endswith(".jsonl"):
+                        file_path = os.path.join(root, f)
+                        try:
+                            mtime = os.path.getmtime(file_path)
+                            if mtime > latest_mtime:
+                                latest_mtime = mtime
+                                latest_file = file_path
+                                latest_is_summary = (f == "summary.md")
+                        except OSError:
+                            pass
+            if not latest_file:
+                return None
+            
+            with open(latest_file, "r", encoding="utf-8", errors="ignore") as f:
+                if latest_is_summary:
+                    return f.read().strip()
+                else:
+                    return _parse_jsonl_messages(f)
+                    
+        elif provider == "codex":
+            latest_file = None
+            latest_mtime = 0
+            
+            for root, dirs, files in os.walk(home_dir):
+                for f in files:
+                    if f.startswith("rollout-") and f.endswith(".jsonl"):
+                        file_path = os.path.join(root, f)
+                        try:
+                            mtime = os.path.getmtime(file_path)
+                            if mtime > latest_mtime:
+                                latest_mtime = mtime
+                                latest_file = file_path
+                        except OSError:
+                            pass
+            
+            if not latest_file:
+                hist_path = os.path.join(home_dir, "history.jsonl")
+                if os.path.exists(hist_path):
+                    latest_file = hist_path
+            
+            if not latest_file:
+                return None
+                
+            with open(latest_file, "r", encoding="utf-8", errors="ignore") as f:
+                return _parse_jsonl_messages(f)
+                
+        return None
+    except Exception as e:
+        return f"Could not extract context: {str(e)}"
+
+
 def cmd_rotate(fam):
     """Manual rotation: cool the account the CURRENT environment points at
     (falling back to the current best) and report the next one."""
@@ -469,5 +568,19 @@ def cmd_rotate(fam):
         return 2
     print(f"rotated {current['name']} -> {successor['name']} ({fam}); "
           f"{current['name']} cools until {tfmt(reset)}")
-    print(f"export {env_key(successor)}={shlex.quote(successor['home'])}")
+    import sys
+    if sys.platform == "win32":
+        print(f"PowerShell: $env:{env_key(successor)}='{successor['home']}'")
+        print(f"CMD: set {env_key(successor)}={successor['home']}")
+    else:
+        print(f"export {env_key(successor)}={shlex.quote(successor['home'])}")
+    
+    context_summary = _extract_session_context(current["home"], current["provider"])
+    if context_summary:
+        print("\n" + "=" * 60)
+        print(" [headroom] CONTEXT SUMMARY FROM PREVIOUS SESSION")
+        print("=" * 60)
+        print(context_summary)
+        print("=" * 60 + "\n")
+        
     return 0

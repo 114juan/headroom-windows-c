@@ -33,6 +33,13 @@ fi
 ln -sf "$REPO/bin/headroom" "$TARGET"
 chmod +x "$REPO/bin/headroom"
 
+echo "Installing/updating graphifyy (codebase mapping utility)..."
+if command -v uv >/dev/null 2>&1; then
+  uv pip install --upgrade graphifyy || pip install --upgrade graphifyy || true
+else
+  python3 -m pip install --upgrade graphifyy || pip install --upgrade graphifyy || true
+fi
+
 echo "installed: $TARGET_DIR/headroom -> $REPO/bin/headroom"
 case ":$PATH:" in
   *":$TARGET_DIR:"*) ;;

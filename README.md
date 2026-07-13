@@ -46,17 +46,24 @@ headroom fixes all three problems:
 
 ## Quickstart
 
-Requirements: Python 3.9+ (stdlib only — no pip installs), macOS or Linux,
-and the `claude` and/or `codex` CLIs you already use. (On macOS, connect
-Claude accounts with a fresh `headroom connect` login rather than adopting the
-Keychain-backed default — see [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).)
+Requirements: Python 3.9+ (stdlib only — no pip installs except graphifyy), macOS, Linux, or Windows, and the `claude` and/or `codex` CLIs you already use. (On macOS, connect Claude accounts with a fresh `headroom connect` login rather than adopting the Keychain-backed default — see [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).)
 
+**On macOS/Linux:**
 ```bash
 git clone https://github.com/domanski-ai/headroom
 cd headroom
-./install.sh              # symlinks bin/headroom onto your PATH
+./install.sh              # symlinks bin/headroom onto your PATH (auto-installs graphifyy)
 headroom serve --demo     # OPTIONAL: preview it now with sample data, no setup
-headroom setup            # the wizard: connects accounts, styles your dashboard
+headroom setup            # the wizard: connects accounts, styles your dashboard, sets up graphify
+```
+
+**On Windows (PowerShell):**
+```powershell
+git clone https://github.com/domanski-ai/headroom
+cd headroom
+powershell -File install.ps1  # installs headroom launchers and auto-installs graphifyy
+headroom serve --demo
+headroom setup
 ```
 
 Want to see it before connecting anything? `headroom serve --demo` opens the
@@ -93,6 +100,7 @@ headroom rotate            # limit hit? cool this login, switch to the next
 | `headroom serve --demo` | preview the dashboard with bundled sample data — no accounts needed |
 | `headroom statusline` | color-coded capacity for your Claude Code status line |
 | `headroom doctor` | environment + config health check (handy for bug reports) |
+| `headroom graphify [args]` | run the graphify codebase mapper on the project |
 
 ## How the reads work (and why they're safe)
 
