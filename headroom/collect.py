@@ -487,9 +487,31 @@ def limit_entry(limit, minutes):
     }
 
 
+def refresh_claude_token(home):
+    binary = claude_bin()
+    if not binary:
+        return False
+    env = scrubbed_env()
+    env["CLAUDE_CONFIG_DIR"] = home
+    try:
+        subprocess.run(
+            [binary, "--print", "verifying token", "--tools", ""],
+            env=env, capture_output=True, text=True, timeout=15
+        )
+        return True
+    except Exception:
+        return False
+
+
 def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
     oauth = credentials.get("claudeAiOauth") or {}
+    expires_at = oauth.get("expiresAt")
+    if expires_at and (expires_at / 1000.0) < (time.time() + 60):
+        refresh_claude_token(home)
+        credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
+        oauth = credentials.get("claudeAiOauth") or {}
+
     if not oauth.get("accessToken"):
         raise IdentityBindingError("claude_credentials_missing")
     request = urllib.request.Request(
@@ -503,11 +525,35 @@ def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     try:
         response = opener(request, timeout=30)
     except urllib.error.HTTPError as error:
-        if error.code == 429:
+        if error.code == 401:
+            if refresh_claude_token(home):
+                credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
+                oauth = credentials.get("claudeAiOauth") or {}
+                if oauth.get("accessToken"):
+                    request = urllib.request.Request(
+                        "https://api.anthropic.com/api/oauth/usage",
+                        headers={
+                            "authorization": "Bearer " + oauth["accessToken"],
+                            "anthropic-beta": "oauth-2025-04-20",
+                            "anthropic-version": "2023-06-01",
+                        },
+                    )
+                    try:
+                        response = opener(request, timeout=30)
+                    except urllib.error.HTTPError as retry_error:
+                        if retry_error.code == 429:
+                            raise ProviderThrottleError(
+                                retry_after_epoch(retry_error.headers), provider_response=True
+                            ) from retry_error
+                        raise
+            else:
+                raise
+        elif error.code == 429:
             raise ProviderThrottleError(
                 retry_after_epoch(error.headers), provider_response=True
             ) from error
-        raise
+        else:
+            raise
     with response:
         response_org = response.headers.get("anthropic-organization-id")
         response_fingerprint = fingerprint(response_org) if response_org else None
@@ -746,6 +792,9 @@ def collect(accounts, backoff=None, persist_backoff=None):
                     raise ProviderThrottleError(claude_backoff_until)
                 result.update(claude_limits(account["home"],
                                             account.get("pinned_usage_org")))
+                # Recalculate digest in case token was refreshed during claude_limits
+                identity["credential_digest"] = credential_digest(
+                    "claude", account["home"])
                 if not account.get("pinned_usage_org") \
                         and result.get("source_identity_fingerprint"):
                     # trust-on-first-use: remember which org this slot's
