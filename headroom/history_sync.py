@@ -5,6 +5,20 @@ import sys
 import subprocess
 from . import paths, registry
 
+def is_junction_or_symlink(path):
+    if os.path.islink(path):
+        return True
+    if sys.platform == "win32" and os.path.exists(path):
+        try:
+            import stat
+            s = os.lstat(path)
+            tag = getattr(s, "st_reparse_tag", 0)
+            if tag in (stat.IO_REPARSE_TAG_MOUNT_POINT, stat.IO_REPARSE_TAG_SYMLINK):
+                return True
+        except OSError:
+            pass
+    return False
+
 def create_junction_or_symlink(link_path, target_path):
     # Ensure targets are absolute
     link_path = os.path.abspath(link_path)
@@ -25,9 +39,9 @@ def create_junction_or_symlink(link_path, target_path):
                 
     # Create the junction/symlink
     if sys.platform == "win32":
-        # On Windows, use powershell New-Item Junction (does not require admin privileges)
+        # On Windows, use cmd built-in mklink /j (does not require admin privileges)
         subprocess.run(
-            ["powershell", "-Command", f"New-Item -ItemType Junction -Path '{link_path}' -Value '{target_path}'"],
+            ["cmd", "/c", "mklink", "/j", link_path, target_path],
             capture_output=True, text=True, check=True
         )
     else:
@@ -74,15 +88,7 @@ def cmd_share_history():
             shared_path = os.path.join(shared_base, subdir)
             
             # Check if it is already linked
-            is_linked = os.path.islink(local_path)
-            if not is_linked and sys.platform == "win32" and os.path.exists(local_path):
-                # Check link type on Windows
-                proc = subprocess.run(
-                    ["powershell", "-Command", f"(Get-Item '{local_path}').LinkType"],
-                    capture_output=True, text=True
-                )
-                if "Junction" in proc.stdout or "SymbolicLink" in proc.stdout:
-                    is_linked = True
+            is_linked = is_junction_or_symlink(local_path)
                     
             if is_linked:
                 print(f"  - {subdir}: already shared/linked")

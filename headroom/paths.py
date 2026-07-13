@@ -84,7 +84,8 @@ def write_json_atomic(path, value, mode=0o600):
         prefix=".headroom-", suffix=".json.tmp", dir=directory
     )
     try:
-        os.fchmod(descriptor, mode)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "w") as handle:
             json.dump(value, handle, indent=2, allow_nan=False)
             handle.write("\n")

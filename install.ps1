@@ -85,8 +85,8 @@ foreach ($p in $pathList) {
 if (-not $alreadyOnPath) {
     Write-Host ""
     Write-Warning "$TargetDir is not on your User PATH."
-    Write-Host "To add it, run this in PowerShell as Administrator:"
-    Write-Host "  [Environment]::SetEnvironmentVariable('Path', `$env:Path + ';$TargetDir', 'User')"
+    Write-Host "To add it, run this in PowerShell:"
+    Write-Host "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$TargetDir', 'User')"
     Write-Host "Then restart your terminal."
 }
 

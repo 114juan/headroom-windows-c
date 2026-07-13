@@ -225,9 +225,11 @@ def claude_identity(home, runner=subprocess.run):
         env = scrubbed_env()
         env["CLAUDE_CONFIG_DIR"] = home
         try:
+            use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
             process = runner(
                 [binary, "auth", "status", "--json"], env=env,
                 capture_output=True, text=True, timeout=IDENTITY_TIMEOUT,
+                shell=use_shell
             )
             if process.returncode == 0:
                 status = json.loads(process.stdout)
@@ -265,10 +267,11 @@ def codex_app_server_read(home, timeout=None):
     env = scrubbed_env()
     env["CODEX_HOME"] = home
     try:
+        use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
         proc = subprocess.Popen(
             [binary, "app-server"], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-            env=env, bufsize=1)
+            env=env, bufsize=1, shell=use_shell)
     except OSError as error:
         raise IdentityBindingError("codex_app_server_spawn_failed") from error
     stdin, stdout = proc.stdin, proc.stdout
@@ -494,9 +497,10 @@ def refresh_claude_token(home):
     env = scrubbed_env()
     env["CLAUDE_CONFIG_DIR"] = home
     try:
+        use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
         subprocess.run(
             [binary, "--print", "verifying token", "--tools", ""],
-            env=env, capture_output=True, text=True, timeout=15
+            env=env, capture_output=True, text=True, timeout=15, shell=use_shell
         )
         return True
     except Exception:

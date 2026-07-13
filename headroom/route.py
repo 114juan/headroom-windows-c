@@ -348,8 +348,11 @@ def cmd_run(fam, command):
         environment[env_key(account)] = account["home"]
         print(f"[headroom] running on {account['name']}", file=sys.stderr)
         try:
+            import shutil
+            resolved_exe = shutil.which(command[0]) or command[0]
+            use_shell = sys.platform == "win32" and resolved_exe.lower().endswith((".cmd", ".bat", ".ps1"))
             process = subprocess.run(command, env=environment,
-                                     capture_output=True, text=True)
+                                     capture_output=True, text=True, shell=use_shell)
         except OSError as error:
             print(f"[headroom] cannot run {command[0]}: {error}", file=sys.stderr)
             return 127

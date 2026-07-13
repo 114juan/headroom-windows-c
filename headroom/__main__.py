@@ -90,8 +90,12 @@ def _dispatch(argv):
         if not account:
             print("# no account with proven headroom", file=sys.stderr)
             return 2
-        print(f"export {route.env_key(account)}={shlex.quote(account['home'])}"
-              f"  # account={account['name']}")
+        if sys.platform == "win32":
+            print(f"PowerShell: $env:{route.env_key(account)}='{account['home']}'")
+            print(f"CMD: set {route.env_key(account)}={account['home']}")
+        else:
+            print(f"export {route.env_key(account)}={shlex.quote(account['home'])}"
+                  f"  # account={account['name']}")
         return 0
     if command in ("claude", "codex"):
         from . import route
@@ -226,7 +230,8 @@ def _dispatch(argv):
         exe = shutil.which("graphify")
         cmd = [exe] if exe else [sys.executable, "-m", "graphify"]
         try:
-            return subprocess.run(cmd + args).returncode
+            use_shell = sys.platform == "win32" and exe and exe.lower().endswith((".cmd", ".bat", ".ps1"))
+            return subprocess.run(cmd + args, shell=use_shell).returncode
         except Exception as error:
             print(f"headroom: error running graphify: {error}", file=sys.stderr)
             return 1

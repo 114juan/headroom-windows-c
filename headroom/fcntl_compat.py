@@ -9,6 +9,7 @@ try:
     LOCK_UN = fcntl.LOCK_UN
     flock = fcntl.flock
 except ImportError:
+    import errno
     import msvcrt
 
     LOCK_EX = 1
@@ -28,7 +29,9 @@ except ImportError:
             else:
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         except OSError as e:
-            raise BlockingIOError(str(e)) from e
+            if e.errno in (errno.EACCES, errno.EDEADLK):
+                raise BlockingIOError(str(e)) from e
+            raise
         finally:
             try:
                 file.seek(current_pos)

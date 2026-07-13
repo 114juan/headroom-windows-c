@@ -159,9 +159,10 @@ def run_setup():
         import shutil
         exe = shutil.which("graphify")
         cmd = [exe] if exe else [sys.executable, "-m", "graphify"]
+        use_shell = sys.platform == "win32" and exe and exe.lower().endswith((".cmd", ".bat", ".ps1"))
         for tool in ["antigravity", "claude", "codex"]:
             try:
-                subprocess.run(cmd + [tool, "install"], capture_output=True, text=True)
+                subprocess.run(cmd + [tool, "install"], capture_output=True, text=True, shell=use_shell)
             except Exception:
                 pass
         print("  Graphify rules and skills successfully integrated into your agent configuration!")
