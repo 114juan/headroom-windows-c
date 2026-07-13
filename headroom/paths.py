@@ -69,7 +69,7 @@ def collect_lock_path():
 
 def load_json(path):
     try:
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             return json.load(handle)
     except (OSError, ValueError, json.JSONDecodeError):
         return None
@@ -112,7 +112,7 @@ def write_json_atomic(path, value, mode=0o600):
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "w") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(value, handle, indent=2, allow_nan=False)
             handle.write("\n")
             handle.flush()
