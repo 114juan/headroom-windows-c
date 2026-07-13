@@ -53,11 +53,7 @@ def _read_cooldowns():
     path = paths.cooldowns_path()
     if not os.path.exists(path):
         return {}
-    try:
-        with open(path) as handle:
-            value = json.load(handle)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
+    value = paths.load_json(path)
     return value if isinstance(value, dict) else None
 
 
@@ -348,10 +344,8 @@ def cmd_run(fam, command):
         environment[env_key(account)] = account["home"]
         print(f"[headroom] running on {account['name']}", file=sys.stderr)
         try:
-            import shutil
-            resolved_exe = shutil.which(command[0]) or command[0]
-            use_shell = sys.platform == "win32" and resolved_exe.lower().endswith((".cmd", ".bat", ".ps1"))
-            process = subprocess.run(command, env=environment,
+            cmd_args, use_shell = paths.prepare_subprocess(command)
+            process = subprocess.run(cmd_args, env=environment,
                                      capture_output=True, text=True, shell=use_shell)
         except OSError as error:
             print(f"[headroom] cannot run {command[0]}: {error}", file=sys.stderr)
@@ -420,9 +414,8 @@ def cmd_exec(fam, command):
             # On Windows, os.execvp does not replace the process in-place (no execve syscall).
             # It spawns a child and exits immediately, releasing the terminal back to the shell
             # while the child is still running. We must use subprocess.call to block until finished.
-            resolved_exe = shutil.which(command[0]) or command[0]
-            use_shell = resolved_exe.lower().endswith((".cmd", ".bat", ".ps1"))
-            return subprocess.call(command, shell=use_shell)
+            cmd_args, use_shell = paths.prepare_subprocess(command)
+            return subprocess.call(cmd_args, shell=use_shell)
         else:
             os.execvp(command[0], command)
     except FileNotFoundError:
@@ -582,10 +575,12 @@ def cmd_rotate(fam):
           f"{current['name']} cools until {tfmt(reset)}")
     import sys
     if sys.platform == "win32":
-        print(f"PowerShell: $env:{env_key(successor)}='{successor['home']}'")
-        print(f"CMD: set {env_key(successor)}={successor['home']}")
+        ps_home = successor['home'].replace("'", "''")
+        print(f"PowerShell: $env:{env_key(successor)}='{ps_home}'")
+        print(f"CMD: set \"{env_key(successor)}={successor['home']}\"")
     else:
         print(f"export {env_key(successor)}={shlex.quote(successor['home'])}")
+
     
     context_summary = _extract_session_context(current["home"], current["provider"])
     if context_summary:

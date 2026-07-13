@@ -34,7 +34,7 @@ def build_demo(out_dir=None):
     config, no network. Lets anyone preview it in seconds before connecting."""
     import time
     sample = os.path.join(_repo_root(), "examples", "usage.sample.json")
-    with open(sample) as handle:
+    with open(sample, encoding="utf-8") as handle:
         data = json.load(handle)
     now = int(time.time())
     data["generated"] = now - 30
@@ -57,7 +57,7 @@ def build_demo(out_dir=None):
                                  "home": "/tmp/demo/" + a["name"]}
                                 for a in data["accounts"]]}
     build(demo_config, out_dir)
-    with open(os.path.join(out_dir, "usage.json"), "w") as handle:
+    with open(os.path.join(out_dir, "usage.json"), "w", encoding="utf-8") as handle:
         json.dump(data, handle)
     return out_dir
 
@@ -67,7 +67,7 @@ def build(config=None, out_dir=None, snapshot_file=None):
     settings = registry.dashboard_settings(config)
     out_dir = paths.public_dir() if out_dir is None else out_dir
     os.makedirs(out_dir, exist_ok=True)
-    with open(TEMPLATE) as handle:
+    with open(TEMPLATE, encoding="utf-8") as handle:
         html = handle.read()
     injected = {
         "theme": settings["theme"],
@@ -83,7 +83,7 @@ def build(config=None, out_dir=None, snapshot_file=None):
                .replace("&", "\\u0026"))
     html = html.replace("/*__HEADROOM_CONFIG__*/ null", payload)
     index = os.path.join(out_dir, "index.html")
-    with open(index, "w") as handle:
+    with open(index, "w", encoding="utf-8") as handle:
         handle.write(html)
     target = os.path.join(out_dir, "usage.json")
     if snapshot_file and os.path.exists(snapshot_file) \

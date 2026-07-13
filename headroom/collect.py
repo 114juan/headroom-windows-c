@@ -29,6 +29,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -225,11 +226,11 @@ def claude_identity(home, runner=subprocess.run):
         env = scrubbed_env()
         env["CLAUDE_CONFIG_DIR"] = home
         try:
-            use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
+            cmd_args, use_shell = paths.prepare_subprocess([binary, "auth", "status", "--json"])
             process = runner(
-                [binary, "auth", "status", "--json"], env=env,
-                capture_output=True, text=True, timeout=IDENTITY_TIMEOUT,
-                shell=use_shell
+                cmd_args, env=env,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=IDENTITY_TIMEOUT, shell=use_shell
             )
             if process.returncode == 0:
                 status = json.loads(process.stdout)
@@ -267,10 +268,11 @@ def codex_app_server_read(home, timeout=None):
     env = scrubbed_env()
     env["CODEX_HOME"] = home
     try:
-        use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
+        cmd_args, use_shell = paths.prepare_subprocess([binary, "app-server"])
         proc = subprocess.Popen(
-            [binary, "app-server"], stdin=subprocess.PIPE,
+            cmd_args, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            encoding="utf-8", errors="replace",
             env=env, bufsize=1, shell=use_shell)
     except OSError as error:
         raise IdentityBindingError("codex_app_server_spawn_failed") from error
@@ -280,16 +282,19 @@ def codex_app_server_read(home, timeout=None):
     responses = {}
 
     def reader():
-        for line in stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(line)
-            except (ValueError, json.JSONDecodeError):
-                continue
-            if isinstance(message, dict) and "id" in message:
-                responses[message["id"]] = message
+        try:
+            for line in stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    message = json.loads(line)
+                except (ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(message, dict) and "id" in message:
+                    responses[message["id"]] = message
+        except Exception:
+            pass
 
     threading.Thread(target=reader, daemon=True).start()
 
@@ -314,17 +319,33 @@ def codex_app_server_read(home, timeout=None):
         raise IdentityBindingError("codex_app_server_io_failed")
     finally:
         try:
+            stdin.close()
+        except OSError:
+            pass
+        try:
+            stdout.close()
+        except OSError:
+            pass
+        try:
             proc.terminate()
             proc.wait(timeout=3)
         except (subprocess.SubprocessError, OSError):
-            proc.kill()
+            try:
+                proc.kill()
+            except OSError:
+                pass
     if 2 not in responses or 3 not in responses:
         raise IdentityBindingError("codex_app_server_no_response")
     for request_id in (2, 3):
-        if responses[request_id].get("error"):
+        if not isinstance(responses[request_id], dict) or responses[request_id].get("error"):
             raise IdentityBindingError("codex_app_server_error")
-    account = (responses[3].get("result") or {}).get("account") or {}
-    result = responses[2].get("result") or {}
+    account_res = responses[3].get("result")
+    account = account_res.get("account") if isinstance(account_res, dict) else None
+    if not isinstance(account, dict):
+        account = {}
+    result = responses[2].get("result")
+    if not isinstance(result, dict):
+        result = {}
     # Prefer the canonical per-limit bucket; fall back to the backward-compatible
     # single-bucket view. Both carry primary/secondary RateLimitWindow objects.
     by_id = result.get("rateLimitsByLimitId") or {}
@@ -364,6 +385,8 @@ def codex_windows(rate_limits, now):
     primary/secondary position. A standard window the server left out is treated
     as fully available (0% used): a binding window is always reported, so an
     absent one means that limit is not currently a constraint."""
+    if not isinstance(rate_limits, dict):
+        rate_limits = {}
     buckets = {}
     for slot in ("primary", "secondary"):
         mapped = codex_window(rate_limits.get(slot), now)
@@ -446,11 +469,16 @@ def codex_identity(home, opener=open_authenticated):
             headers={"authorization": "Bearer " + tokens["access_token"]},
         )
         with opener(request, timeout=IDENTITY_TIMEOUT) as response:
-            userinfo = json.load(response)
-        if userinfo.get("sub") == claims.get("sub"):
+            try:
+                userinfo = json.load(response)
+            except (json.JSONDecodeError, ValueError) as json_error:
+                raise ValueError("malformed userinfo payload") from json_error
+        if isinstance(userinfo, dict) and userinfo.get("sub") == claims.get("sub"):
             record["verified"] = True
             record["email"] = userinfo.get("email") or record["email"]
             record["method"] = "openai_userinfo"
+    except urllib.error.HTTPError as error:
+        error.close()
     except (OSError, KeyError, ValueError, urllib.error.URLError):
         pass  # identity stays local-only; usage still reported, trust reduced
     if not record["email"]:
@@ -497,10 +525,12 @@ def refresh_claude_token(home):
     env = scrubbed_env()
     env["CLAUDE_CONFIG_DIR"] = home
     try:
-        use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
+        cmd_args, use_shell = paths.prepare_subprocess(
+            [binary, "--print", "verifying token", "--tools", ""])
         subprocess.run(
-            [binary, "--print", "verifying token", "--tools", ""],
-            env=env, capture_output=True, text=True, timeout=15, shell=use_shell
+            cmd_args,
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15, shell=use_shell
         )
         return True
     except Exception:
@@ -529,35 +559,37 @@ def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     try:
         response = opener(request, timeout=30)
     except urllib.error.HTTPError as error:
-        if error.code == 401:
-            if refresh_claude_token(home):
-                credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
-                oauth = credentials.get("claudeAiOauth") or {}
-                if oauth.get("accessToken"):
-                    request = urllib.request.Request(
-                        "https://api.anthropic.com/api/oauth/usage",
-                        headers={
-                            "authorization": "Bearer " + oauth["accessToken"],
-                            "anthropic-beta": "oauth-2025-04-20",
-                            "anthropic-version": "2023-06-01",
-                        },
-                    )
-                    try:
-                        response = opener(request, timeout=30)
-                    except urllib.error.HTTPError as retry_error:
-                        if retry_error.code == 429:
-                            raise ProviderThrottleError(
-                                retry_after_epoch(retry_error.headers), provider_response=True
-                            ) from retry_error
-                        raise
+        with error:
+            if error.code == 401:
+                if refresh_claude_token(home):
+                    credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
+                    oauth = credentials.get("claudeAiOauth") or {}
+                    if oauth.get("accessToken"):
+                        request = urllib.request.Request(
+                            "https://api.anthropic.com/api/oauth/usage",
+                            headers={
+                                "authorization": "Bearer " + oauth["accessToken"],
+                                "anthropic-beta": "oauth-2025-04-20",
+                                "anthropic-version": "2023-06-01",
+                            },
+                        )
+                        try:
+                            response = opener(request, timeout=30)
+                        except urllib.error.HTTPError as retry_error:
+                            with retry_error:
+                                if retry_error.code == 429:
+                                    raise ProviderThrottleError(
+                                        retry_after_epoch(retry_error.headers), provider_response=True
+                                    ) from retry_error
+                                raise
+                else:
+                    raise
+            elif error.code == 429:
+                raise ProviderThrottleError(
+                    retry_after_epoch(error.headers), provider_response=True
+                ) from error
             else:
                 raise
-        elif error.code == 429:
-            raise ProviderThrottleError(
-                retry_after_epoch(error.headers), provider_response=True
-            ) from error
-        else:
-            raise
     with response:
         response_org = response.headers.get("anthropic-organization-id")
         response_fingerprint = fingerprint(response_org) if response_org else None
@@ -573,7 +605,10 @@ def claude_limits(home, expected_fingerprint, opener=open_authenticated):
         if (expected_fingerprint
                 and response_fingerprint != expected_fingerprint):
             raise IdentityBindingError("claude_usage_org_changed")
-        data = json.load(response)
+        try:
+            data = json.load(response)
+        except (json.JSONDecodeError, ValueError) as json_error:
+            raise ValueError("malformed usage response payload") from json_error
     session = weekly = None
     scoped = {}
     for limit in data.get("limits") or []:

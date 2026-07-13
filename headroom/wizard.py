@@ -55,7 +55,7 @@ def run_setup():
                 return 1
             backup = config_file + ".corrupt.bak"
             try:
-                os.replace(config_file, backup)
+                paths.replace_atomic(config_file, backup)
                 print(f"backed the corrupt config up to {backup}")
             except OSError as error:
                 print(f"could not back up the corrupt config ({error}); "
@@ -158,11 +158,11 @@ def run_setup():
         import subprocess
         import shutil
         exe = shutil.which("graphify")
-        cmd = [exe] if exe else [sys.executable, "-m", "graphify"]
-        use_shell = sys.platform == "win32" and exe and exe.lower().endswith((".cmd", ".bat", ".ps1"))
+        cmd_base = [exe] if exe else [sys.executable, "-m", "graphify"]
         for tool in ["antigravity", "claude", "codex"]:
             try:
-                subprocess.run(cmd + [tool, "install"], capture_output=True, text=True, shell=use_shell)
+                cmd_args, use_shell = paths.prepare_subprocess(cmd_base + [tool, "install"])
+                subprocess.run(cmd_args, capture_output=True, text=True, shell=use_shell)
             except Exception:
                 pass
         print("  Graphify rules and skills successfully integrated into your agent configuration!")

@@ -23,7 +23,13 @@ except ImportError:
         file.seek(0)
         try:
             if op & LOCK_UN:
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                except OSError as e:
+                    # Windows LK_UNLCK raises EACCES/PermissionError if the range is not locked
+                    # by the current process. Unix flock(LOCK_UN) is a silent no-op.
+                    if e.errno not in (errno.EACCES, errno.EDEADLK):
+                        raise
             elif op & LOCK_NB:
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             else:

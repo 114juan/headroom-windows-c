@@ -91,8 +91,9 @@ def _dispatch(argv):
             print("# no account with proven headroom", file=sys.stderr)
             return 2
         if sys.platform == "win32":
-            print(f"PowerShell: $env:{route.env_key(account)}='{account['home']}'")
-            print(f"CMD: set {route.env_key(account)}={account['home']}")
+            ps_home = account['home'].replace("'", "''")
+            print(f"PowerShell: $env:{route.env_key(account)}='{ps_home}'")
+            print(f"CMD: set \"{route.env_key(account)}={account['home']}\"")
         else:
             print(f"export {route.env_key(account)}={shlex.quote(account['home'])}"
                   f"  # account={account['name']}")
@@ -227,11 +228,12 @@ def _dispatch(argv):
     if command == "graphify":
         import subprocess
         import shutil
+        from . import paths
         exe = shutil.which("graphify")
         cmd = [exe] if exe else [sys.executable, "-m", "graphify"]
         try:
-            use_shell = sys.platform == "win32" and exe and exe.lower().endswith((".cmd", ".bat", ".ps1"))
-            return subprocess.run(cmd + args, shell=use_shell).returncode
+            cmd_args, use_shell = paths.prepare_subprocess(cmd + args)
+            return subprocess.run(cmd_args, shell=use_shell).returncode
         except Exception as error:
             print(f"headroom: error running graphify: {error}", file=sys.stderr)
             return 1

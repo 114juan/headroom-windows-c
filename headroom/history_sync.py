@@ -40,10 +40,15 @@ def create_junction_or_symlink(link_path, target_path):
     # Create the junction/symlink
     if sys.platform == "win32":
         # On Windows, use cmd built-in mklink /j (does not require admin privileges)
+        # To avoid cmd.exe quote-stripping bugs, we use cmd.exe /s /c and wrap in outer quotes.
+        if '"' in link_path or '"' in target_path:
+            raise ValueError("Paths cannot contain double quotes.")
+        cmd_str = f'cmd.exe /s /c "mklink /j "{link_path}" "{target_path}""'
         subprocess.run(
-            ["cmd", "/c", "mklink", "/j", link_path, target_path],
+            cmd_str,
             capture_output=True, text=True, check=True
         )
+
     else:
         os.symlink(target_path, link_path)
 

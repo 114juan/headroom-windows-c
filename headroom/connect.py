@@ -172,8 +172,8 @@ def connect_fresh(config, name, provider, quiet=False):
         print("Complete the browser flow with the account you want on THIS slot.\n")
     completed = False
     try:
-        use_shell = sys.platform == "win32" and binary.lower().endswith((".cmd", ".bat", ".ps1"))
-        code = subprocess.run(login_argv(provider, binary), env=env, shell=use_shell).returncode
+        cmd_args, use_shell = paths.prepare_subprocess(login_argv(provider, binary))
+        code = subprocess.run(cmd_args, env=env, shell=use_shell).returncode
         if code != 0:
             print(f"login exited {code}; slot unchanged", file=sys.stderr)
             return None

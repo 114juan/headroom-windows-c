@@ -240,5 +240,293 @@ class CodexWindowMapping(unittest.TestCase):
         self.assertEqual(w["7d"]["used_percent"], 0.0)
 
 
+class NetworkAuditorTests(unittest.TestCase):
+    def test_codex_identity_closes_http_error(self):
+        import io
+        import urllib.error
+        import base64
+        import json
+        from unittest.mock import patch
+
+        class TrackedHTTPError(urllib.error.HTTPError):
+            def __init__(self):
+                super().__init__("http://test", 401, "Unauthorized", {}, io.BytesIO(b""))
+                self.close_called = False
+            def close(self):
+                self.close_called = True
+                super().close()
+
+        err = TrackedHTTPError()
+        def mock_opener(req, timeout):
+            raise err
+
+        payload = {
+            "exp": 1900000000,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "a1",
+                "chatgpt_plan_type": "pro"
+            },
+            "email": "test@test.com"
+        }
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        id_token = f"header.{payload_b64}.signature"
+
+        with patch("headroom.paths.load_json") as mock_load:
+            mock_load.return_value = {
+                "tokens": {
+                    "id_token": id_token,
+                    "access_token": "token"
+                }
+            }
+            res = collect.codex_identity("/dummy/home", opener=mock_opener)
+            self.assertFalse(res["verified"])
+            self.assertTrue(err.close_called)
+
+    def test_claude_limits_closes_http_error(self):
+        import io
+        import urllib.error
+        from unittest.mock import patch
+
+        class TrackedHTTPError(urllib.error.HTTPError):
+            def __init__(self, code):
+                super().__init__("http://test", code, "Error", {}, io.BytesIO(b""))
+                self.close_called = False
+            def close(self):
+                self.close_called = True
+                super().close()
+
+        err = TrackedHTTPError(429)
+        def mock_opener(req, timeout):
+            raise err
+
+        with patch("headroom.paths.load_json") as mock_load:
+            mock_load.return_value = {
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "expiresAt": 1900000000000
+                }
+            }
+            with self.assertRaises(collect.ProviderThrottleError):
+                collect.claude_limits("/dummy/home", "expected_fp", opener=mock_opener)
+            self.assertTrue(err.close_called)
+
+    def test_claude_limits_closes_retry_http_error(self):
+        import io
+        import urllib.error
+        from unittest.mock import patch
+
+        class TrackedHTTPError(urllib.error.HTTPError):
+            def __init__(self, code):
+                super().__init__("http://test", code, "Error", {}, io.BytesIO(b""))
+                self.close_called = False
+            def close(self):
+                self.close_called = True
+                super().close()
+
+        err1 = TrackedHTTPError(401)
+        err2 = TrackedHTTPError(429)
+
+        calls = 0
+        def mock_opener(req, timeout):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise err1
+            else:
+                raise err2
+
+        with patch("headroom.paths.load_json") as mock_load, \
+             patch("headroom.collect.refresh_claude_token", return_value=True):
+            mock_load.return_value = {
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "expiresAt": 1900000000000
+                }
+            }
+            with self.assertRaises(collect.ProviderThrottleError):
+                collect.claude_limits("/dummy/home", "expected_fp", opener=mock_opener)
+            self.assertTrue(err1.close_called)
+            self.assertTrue(err2.close_called)
+
+    def test_claude_limits_malformed_json(self):
+        from unittest.mock import patch, MagicMock
+
+        response = MagicMock()
+        response.headers = {"anthropic-organization-id": "org1"}
+        response.read.return_value = b"invalid json{"
+        # Make the response mock act as context manager
+        response.__enter__.return_value = response
+
+        def mock_opener(req, timeout):
+            return response
+
+        with patch("headroom.paths.load_json") as mock_load:
+            mock_load.return_value = {
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "expiresAt": 1900000000000
+                }
+            }
+            with self.assertRaises(ValueError) as ctx:
+                collect.claude_limits("/dummy/home", None, opener=mock_opener)
+            self.assertIn("malformed usage response payload", str(ctx.exception))
+
+    def test_codex_app_server_encoding_and_close(self):
+        from unittest.mock import patch, MagicMock
+        import io
+
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdout = io.StringIO('{"jsonrpc": "2.0", "id": 1, "result": {}}\n'
+                                       '{"jsonrpc": "2.0", "id": 2, "result": {"rateLimits": {}}}\n'
+                                       '{"jsonrpc": "2.0", "id": 3, "result": {"account": {"email": "test@test.com"}}}\n')
+
+        with patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
+             patch("headroom.collect.codex_bin", return_value="codex"):
+            res = collect.codex_app_server_read("/dummy/home", timeout=2)
+            self.assertEqual(res["account"]["email"], "test@test.com")
+
+            mock_popen.assert_called_once()
+            kwargs = mock_popen.call_args[1]
+            self.assertEqual(kwargs.get("encoding"), "utf-8")
+            self.assertEqual(kwargs.get("errors"), "replace")
+
+            mock_proc.stdin.close.assert_called_once()
+
+    def test_codex_app_server_malformed_response(self):
+        from unittest.mock import patch, MagicMock
+        import io
+
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        # "result" is a string instead of a dict
+        mock_proc.stdout = io.StringIO('{"jsonrpc": "2.0", "id": 1, "result": {}}\n'
+                                       '{"jsonrpc": "2.0", "id": 2, "result": "malformed_string"}\n'
+                                       '{"jsonrpc": "2.0", "id": 3, "result": {"account": "another_malformed"}}\n')
+
+        with patch("subprocess.Popen", return_value=mock_proc), \
+             patch("headroom.collect.codex_bin", return_value="codex"):
+            res = collect.codex_app_server_read("/dummy/home", timeout=2)
+            self.assertEqual(res["account"], {})
+            self.assertEqual(res["rate_limits"], {})
+
+
+class FileOpsAndStateIntegrityTests(unittest.TestCase):
+    def test_utf8_load_save(self):
+        import tempfile
+        from headroom import paths
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = os.path.join(tmp, "test_utf8.json")
+            data = {"message": "héllo, ユーザー!"}
+            paths.write_json_atomic(test_file, data)
+            loaded = paths.load_json(test_file)
+            self.assertEqual(loaded, data)
+
+    def test_corrupt_recovery(self):
+        import tempfile
+        from headroom import paths
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = os.path.join(tmp, "corrupt.json")
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("{invalid: json}")
+            loaded = paths.load_json(test_file)
+            self.assertIsNone(loaded)
+
+    def test_nonexistent_returns_none(self):
+        from headroom import paths
+        loaded = paths.load_json("does_not_exist_xyz.json")
+        self.assertIsNone(loaded)
+
+    def test_prepare_subprocess(self):
+        from headroom import paths
+        from unittest.mock import patch
+
+        # Non-Windows test
+        with patch("sys.platform", "linux"):
+            cmd = ["claude", "auth", "login"]
+            res_cmd, use_shell = paths.prepare_subprocess(cmd)
+            self.assertEqual(res_cmd, cmd)
+            self.assertFalse(use_shell)
+
+        # Windows tests
+        with patch("sys.platform", "win32"):
+            # ps1 script
+            with patch("shutil.which", return_value="C:\\path\\claude.ps1"):
+                res_cmd, use_shell = paths.prepare_subprocess(["claude", "auth"])
+                self.assertEqual(res_cmd, ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\claude.ps1", "auth"])
+                self.assertFalse(use_shell)
+
+            # cmd script
+            with patch("shutil.which", return_value="C:\\path with spaces\\claude.cmd"):
+                res_cmd, use_shell = paths.prepare_subprocess(["claude", "auth", "login"])
+                self.assertEqual(res_cmd, 'cmd.exe /s /c ""C:\\path with spaces\\claude.cmd" auth login"')
+                self.assertFalse(use_shell)
+
+            # exe or standard command
+            with patch("shutil.which", return_value="C:\\path\\claude.exe"):
+                res_cmd, use_shell = paths.prepare_subprocess(["claude", "auth"])
+                self.assertEqual(res_cmd, ["C:\\path\\claude.exe", "auth"])
+                self.assertFalse(use_shell)
+
+
+
+class LockAndConcurrencyTests(unittest.TestCase):
+    def test_flock_lock_and_unlock(self):
+        import tempfile
+        from headroom import fcntl_compat as fcntl
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = os.path.join(tmp, "test.lock")
+            with open(lock_path, "w") as f1:
+                # Lock should succeed
+                fcntl.flock(f1, fcntl.LOCK_EX)
+
+                # Try locking from a different file descriptor, should raise BlockingIOError
+                with open(lock_path, "w") as f2:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(f2, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                # Unlock should succeed
+                fcntl.flock(f1, fcntl.LOCK_UN)
+
+                # Unlocking again should not raise any error (silent no-op compat)
+                fcntl.flock(f1, fcntl.LOCK_UN)
+
+    def test_replace_atomic_retries_on_sharing_violation(self):
+        import tempfile
+        from headroom import paths
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src.json")
+            dst = os.path.join(tmp, "dst.json")
+            with open(src, "w") as f:
+                f.write("source")
+            with open(dst, "w") as f:
+                f.write("dest")
+
+            # Mock os.replace to raise PermissionError once, then succeed
+            call_count = 0
+            original_replace = os.replace
+
+            def mock_replace(s, d):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    # Under Windows, PermissionError inherits from OSError and matches WinError 5
+                    e = PermissionError("[WinError 5] Access is denied")
+                    e.winerror = 5
+                    raise e
+                original_replace(s, d)
+
+            with patch("os.replace", side_effect=mock_replace):
+                paths.replace_atomic(src, dst)
+
+            self.assertEqual(call_count, 2)
+            with open(dst, "r") as f:
+                self.assertEqual(f.read(), "source")
+
+
 if __name__ == "__main__":
     unittest.main()
+

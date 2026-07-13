@@ -57,7 +57,15 @@ python -c "import sys, os; sys.path.insert(0, os.environ['HEADROOM_REPO']); from
 $PsContent = @"
 `$REPO = "$REPO"
 `$env:HEADROOM_REPO = `$REPO
-python -c "import sys, os; sys.path.insert(0, os.environ['HEADROOM_REPO']); from headroom.__main__ import main; sys.exit(main())" `$args
+`$passed = @()
+foreach (`$arg in `$args) {
+    if (`$arg -eq "") {
+        `$passed += '""'
+    } else {
+        `$passed += `$arg
+    }
+}
+python -c "import sys, os; sys.path.insert(0, os.environ['HEADROOM_REPO']); from headroom.__main__ import main; sys.exit(main())" `$passed
 "@
 
 $CmdContent | Out-File -FilePath $CmdPath -Encoding ascii -Force
