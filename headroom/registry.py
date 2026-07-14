@@ -72,7 +72,7 @@ def family_provider(fam):
 def expand(path):
     # realpath so two paths that resolve to the same home (one via a symlink)
     # canonicalize identically for storage and duplicate detection
-    return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(path))))
 
 
 def validate(config):

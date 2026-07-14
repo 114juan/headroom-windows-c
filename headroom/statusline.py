@@ -55,7 +55,7 @@ def main():
     current = None
     try:
         for account in registry.accounts():
-            if os.path.realpath(account["home"]) == current_home:
+            if os.path.normcase(os.path.realpath(account["home"])) == os.path.normcase(current_home):
                 current = account
                 break
     except registry.RegistryError:

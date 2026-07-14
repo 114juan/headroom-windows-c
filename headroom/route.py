@@ -436,7 +436,7 @@ def current_account(fam):
     home = os.path.realpath(os.path.expanduser(os.environ.get(var, default)))
     try:
         for account in registry.ordered_for(fam):
-            if os.path.realpath(account["home"]) == home:
+            if os.path.normcase(os.path.realpath(account["home"])) == os.path.normcase(home):
                 return account
     except registry.RegistryError:
         pass

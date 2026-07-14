@@ -147,8 +147,8 @@ def connect_fresh(config, name, provider, quiet=False):
               f"only (max 32 chars)", file=sys.stderr)
         return None
     home = os.path.join(paths.homes_dir(), name)
-    if os.path.realpath(home) != os.path.realpath(
-            os.path.join(paths.homes_dir(), os.path.basename(name))):
+    if os.path.normcase(os.path.realpath(home)) != os.path.normcase(os.path.realpath(
+            os.path.join(paths.homes_dir(), os.path.basename(name)))):
         print("slot name resolves outside the homes directory; refused",
               file=sys.stderr)
         return None
