@@ -20,6 +20,7 @@ THEMES = [
     ("chrome", "Chrome — brushed metal, glossy gauges, instrument-panel feel"),
     ("paper", "Paper — warm parchment ledger with battery cells"),
     ("terminal", "Terminal — green-on-black CRT, pure operator nostalgia"),
+    ("bentho", "Bentho — bentho.org login: sky-glow glass over near-black"),
 ]
 
 

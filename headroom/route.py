@@ -428,12 +428,19 @@ def cmd_exec(fam, command):
         return 127
 
 
-def current_account(fam):
-    """The registry account this process's environment actually points at."""
+def active_home(fam):
+    """The provider home this process's environment actually points at —
+    a registry slot when launched via headroom, or the plain default
+    (~/.claude, ~/.codex) when not."""
     provider = registry.family_provider(fam)
     var = "CLAUDE_CONFIG_DIR" if provider == "claude" else "CODEX_HOME"
     default = "~/.claude" if provider == "claude" else "~/.codex"
-    home = os.path.realpath(os.path.expanduser(os.environ.get(var, default)))
+    return os.path.expanduser(os.environ.get(var, default))
+
+
+def current_account(fam):
+    """The registry account this process's environment actually points at."""
+    home = os.path.realpath(active_home(fam))
     try:
         for account in registry.ordered_for(fam):
             if os.path.normcase(os.path.realpath(account["home"])) == os.path.normcase(home):
@@ -542,11 +549,13 @@ def _extract_session_context(home_dir, provider):
         return f"Could not extract context: {str(e)}"
 
 
-def cmd_rotate(fam):
+def cmd_rotate(fam, launch=False):
     """Manual rotation: cool the account the CURRENT environment points at
-    (falling back to the current best) and report the next one."""
+    (falling back to the current best), carry this project's conversation
+    over to the successor, and report (or --launch straight into) it."""
     snapshot = ensure_fresh_snapshot()
     ranked = candidates(fam, snapshot)
+    source_home = active_home(fam)
     current = current_account(fam)
     if current is None:
         current = next((a for a, r in ranked if r is None), None)
@@ -573,21 +582,66 @@ def cmd_rotate(fam):
         return 2
     print(f"rotated {current['name']} -> {successor['name']} ({fam}); "
           f"{current['name']} cools until {tfmt(reset)}")
-    import sys
+
+    # carry this project's conversation to the successor home, so
+    # `claude --continue` there resumes the exact same conversation
+    carried = None
+    if successor["provider"] == "claude":
+        from . import history_sync
+        try:
+            carried = history_sync.sync_project(source_home, successor["home"])
+        except Exception as error:  # noqa: BLE001 — sync is best-effort
+            print(f"[headroom] conversation sync failed: {error}", file=sys.stderr)
+    if carried == "shared":
+        print(f"conversation: shared history — already visible to "
+              f"{successor['name']}")
+    elif isinstance(carried, int):
+        print(f"conversation: synced {carried} file(s) to {successor['name']}")
+
+    if launch and successor["provider"] == "claude":
+        return _launch_continue(successor)
+
     if sys.platform == "win32":
         ps_home = successor['home'].replace("'", "''")
         print(f"PowerShell: $env:{env_key(successor)}='{ps_home}'")
         print(f"CMD: set \"{env_key(successor)}={successor['home']}\"")
     else:
         print(f"export {env_key(successor)}={shlex.quote(successor['home'])}")
-
-    
-    context_summary = _extract_session_context(current["home"], current["provider"])
-    if context_summary:
-        print("\n" + "=" * 60)
-        print(" [headroom] CONTEXT SUMMARY FROM PREVIOUS SESSION")
-        print("=" * 60)
-        print(context_summary)
-        print("=" * 60 + "\n")
-        
+    if carried is not None:
+        print("resume the same conversation with:  headroom claude -c   "
+              "(or: headroom rotate --launch)")
+    else:
+        # nothing to sync for this project — fall back to a text digest the
+        # user can paste into the fresh session
+        context_summary = _extract_session_context(current["home"],
+                                                   current["provider"])
+        if context_summary:
+            print("\n" + "=" * 60)
+            print(" [headroom] CONTEXT SUMMARY FROM PREVIOUS SESSION")
+            print("=" * 60)
+            print(context_summary)
+            print("=" * 60 + "\n")
     return 0
+
+
+def _launch_continue(account):
+    """Relaunch Claude Code on ``account`` continuing this project's latest
+    conversation — same terminal, same conversation, fresh credentials."""
+    for var in collector.AUTH_OVERRIDE_VARS:
+        os.environ.pop(var, None)
+    os.environ[env_key(account)] = account["home"]
+    print(f"[headroom] relaunching Claude Code on {account['name']} "
+          f"(--continue)", file=sys.stderr)
+    command = ["claude", "--continue"]
+    try:
+        if sys.platform == "win32":
+            cmd_args, use_shell = paths.prepare_subprocess(command)
+            return subprocess.call(cmd_args, shell=use_shell)
+        os.execvp(command[0], command)
+    except FileNotFoundError:
+        print("[headroom] `claude` not found on PATH — set the env var above "
+              "and relaunch manually", file=sys.stderr)
+        return 127
+    except OSError as error:
+        print(f"[headroom] cannot exec claude: {error}", file=sys.stderr)
+        return 127

@@ -30,8 +30,12 @@ Add to `~/.claude/settings.json`:
 ## 2. The /rotator skill
 
 Lets Claude Code rotate accounts for you: when a session dies on a usage
-limit, say "rotate the account" (or type `/rotator`) and Claude runs the
-headroom engine, cools the exhausted login down, and hands you the next one.
+limit, say "rotate the account" (or type `/rotator` / `/rotate`) and Claude
+runs the headroom engine, cools the exhausted login down, and hands you the
+next one — carrying the current conversation over, so `headroom claude -c`
+(or `headroom rotate claude --launch` from a terminal) resumes it exactly
+where it left off on the new account. Run `headroom share-history` once to
+make the carry-over instant via shared junctions.
 
 Install by copying the skill into your personal skills directory:
 

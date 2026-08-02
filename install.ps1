@@ -75,6 +75,20 @@ Write-Host "Installed launchers in: $TargetDir"
 Write-Host "  headroom.cmd -> $CmdPath"
 Write-Host "  headroom.ps1 -> $PsPath"
 
+# 4b. Extensionless bash launcher so `headroom` also works in Git Bash / MSYS
+$BashPath = Join-Path $TargetDir "headroom"
+$RepoForward = $REPO -replace '\', '/'
+$BashContent = "#!/usr/bin/env bash`n" +
+    "# headroom launcher for Git Bash on Windows - mirrors headroom.cmd`n" +
+    "export HEADROOM_REPO=`"$RepoForward`"`n" +
+    "exec python -c 'import sys, os`n" +
+    "sys.path.insert(0, os.environ[`"HEADROOM_REPO`"])`n" +
+    "from headroom.__main__ import main`n" +
+    "sys.exit(main())' `"`$@`"`n"
+[IO.File]::WriteAllText($BashPath, $BashContent.Replace("`r`n", "`n"))
+Write-Host "  headroom     -> $BashPath  (Git Bash)"
+
+
 # 5. Check PATH
 $pathEnv = [Environment]::GetEnvironmentVariable("Path", "User")
 $pathList = $pathEnv -split ";"

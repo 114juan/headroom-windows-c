@@ -93,6 +93,21 @@ def build(config=None, out_dir=None, snapshot_file=None):
     return index
 
 
+class QuietServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True  # don't let a lingering connection block Ctrl-C
+
+    def handle_error(self, request, client_address):
+        # a browser closing/reloading the tab mid-response aborts the socket
+        # (WinError 10053 / ECONNRESET); that's routine, not a server fault
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
+_collect_lock = threading.Lock()
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     demo = False
 
@@ -123,9 +138,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if not self._host_ok():
+            body = b"forbidden: non-loopback Host"
             self.send_response(403)
+            self.send_header("content-type", "text/plain")
+            self.send_header("content-length", str(len(body)))
             self.end_headers()
-            self.wfile.write(b"forbidden: non-loopback Host")
+            self.wfile.write(body)
             return
         # in demo mode the sample usage.json is a static file in the served dir;
         # never try to re-collect (there are no real accounts)
@@ -133,11 +151,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             snapshot = paths.load_json(paths.public_snapshot_path())
             generated = (snapshot or {}).get("generated", 0)
             if not snapshot or time.time() - generated > SERVE_MAX_AGE:
-                try:
-                    collector.run_collect(quiet=True)
+                # one collect at a time: concurrent stale requests wait here,
+                # then re-check and reuse the snapshot the winner just wrote
+                with _collect_lock:
                     snapshot = paths.load_json(paths.public_snapshot_path())
-                except Exception:  # noqa: BLE001 — serve the last good snapshot
-                    pass
+                    generated = (snapshot or {}).get("generated", 0)
+                    if not snapshot or time.time() - generated > SERVE_MAX_AGE:
+                        try:
+                            collector.run_collect(quiet=True)
+                            snapshot = paths.load_json(paths.public_snapshot_path())
+                        except Exception:  # noqa: BLE001 — serve the last good snapshot
+                            pass
             if not snapshot:
                 self.send_response(503)
                 self.send_header("content-type", "application/json")
@@ -155,7 +179,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
 
-def serve(open_browser=False, port=None, demo=False):
+def serve(open_browser=True, port=None, demo=False):
     if demo:
         out_dir = build_demo()
         port = port or 8377
@@ -168,7 +192,7 @@ def serve(open_browser=False, port=None, demo=False):
     handler_cls = type("HeadroomHandler", (Handler,), {"demo": demo})
     handler = lambda *args, **kwargs: handler_cls(*args, directory=out_dir, **kwargs)  # noqa: E731
     try:
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+        server = QuietServer(("127.0.0.1", port), handler)
     except OSError as error:
         print(f"headroom: cannot bind port {port} ({error}). "
               f"Is `headroom serve` already running? Try --port <N>.",
@@ -183,3 +207,5 @@ def serve(open_browser=False, port=None, demo=False):
     except KeyboardInterrupt:
         print("\nstopped")
         return 0
+    finally:
+        server.server_close()

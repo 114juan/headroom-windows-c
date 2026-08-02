@@ -15,7 +15,7 @@
   --cell-radius: 1px;
   --panel-shadow: none;
   --cell-glow: none;
-  --meter-height: 14px;
+  --glow-r: 0px;
 }
 
 /* ============================================================== themes */
@@ -30,6 +30,7 @@
   --unknown: #454c5c;
   --cell-bg: #1a1f2b;
   --cell-glow: 0 0 6px;
+  --glow-r: 3px;
   --panel-shadow: 0 1px 0 rgba(255,255,255,.03) inset;
   --radius: 6px;
 }
@@ -43,7 +44,6 @@
   --green: #1db954; --yellow: #e6b800; --orange: #f07c22; --red: #e5484d;
   --unknown: #d0d0d0;
   --cell-bg: #f2f2f2;
-  --meter-height: 8px;
   --cell-gap: 2px;
   --radius: 0px;
 }
@@ -87,11 +87,41 @@
   --unknown: #123c1c;
   --cell-bg: #0a140c;
   --cell-glow: 0 0 8px;
+  --glow-r: 5px;
   --sans: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --radius: 0px;
 }
 [data-theme="terminal"] body { text-shadow: 0 0 4px rgba(51,255,102,.35); }
 [data-theme="terminal"] .panel { box-shadow: 0 0 12px rgba(51,255,102,.06) inset; }
+/* BENTHO — bentho.org login: sky-glow glass panels over near-black */
+[data-theme="bentho"] {
+  --bg: #0b0c10; --bg-grid: transparent;
+  --panel: rgba(18,20,28,.82); --panel-2: rgba(26,29,40,.82);
+  --line: rgba(255,255,255,.07); --line-strong: rgba(255,255,255,.12);
+  --ink: #ffffff; --ink-2: #d1d5db; --ink-3: #9ca3af;
+  --accent: #38bdf8;
+  --green: #10b981; --yellow: #fbbf24; --orange: #fb923c; --red: #f87171;
+  --unknown: #2a2f3d;
+  --cell-bg: #1a1d28;
+  --cell-glow: 0 0 8px;
+  --glow-r: 4px;
+  --panel-shadow: 0 10px 25px rgba(0,0,0,.45), 0 0 0 1px rgba(56,189,248,.05);
+  --radius: 16px;
+  --cell-radius: 2px;
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+[data-theme="bentho"] body::before {
+  background-image:
+    radial-gradient(900px 480px at 75% -120px, rgba(56,189,248,.14), transparent 65%),
+    radial-gradient(700px 420px at 8% 108%, rgba(14,165,233,.08), transparent 60%);
+  background-size: auto;
+}
+[data-theme="bentho"] .panel, [data-theme="bentho"] .summary-item {
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+[data-theme="bentho"] select.theme-picker, [data-theme="bentho"] button.refresh {
+  border-radius: 99px;
+}
 
 /* ================================================================ layout */
 * { box-sizing: border-box; }
@@ -137,32 +167,16 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .summary-note { margin: 0; color: var(--ink-2); font: 400 9.5px/1.3 var(--mono);
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .summary-value { font: 700 20px/1 var(--mono); }
-.viz { flex: 1 0 auto; display: flex; align-items: flex-end; }
-/* verified: one segment per account */
-.seg-row { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
-           gap: var(--cell-gap); height: 10px; width: 100%; align-self: end; }
-.seg { border-radius: var(--cell-radius); background: var(--cell-bg); }
+.viz { flex: 1 0 auto; display: flex; align-items: center; }
+.viz--center { justify-content: center; }
+/* verified: one dot per account */
+.seg-row { display: flex; gap: 7px; align-items: center; align-self: center; }
+.seg { width: 9px; height: 9px; border-radius: 50%; background: var(--cell-bg); }
 .seg.is-on { background: var(--green); box-shadow: var(--cell-glow) var(--green); }
 .seg.is-off { background: var(--cell-bg); }
-/* average: a single gauge with tick marks */
-.gauge { position: relative; height: 10px; width: 100%; align-self: end;
-         border-radius: var(--cell-radius); background: var(--cell-bg); overflow: hidden; }
-.gauge-fill { position: absolute; inset: 0; width: var(--fill, 0%);
-              background: var(--tone, var(--unknown));
-              box-shadow: var(--cell-glow) var(--tone, transparent); }
-.gauge-ticks { position: absolute; inset: 0; display: grid;
-               grid-template-columns: repeat(10, 1fr); }
-.gauge-ticks span { border-right: 1px solid var(--bg); }
-.gauge-ticks span:last-child { border-right: 0; }
-/* lowest: a compact battery meter */
-.summary-item .meter { height: 10px; margin-top: 0; width: 100%; align-self: end; }
-/* fleet: one bar per account, height = session headroom */
-.fleet-bars { display: flex; align-items: flex-end; justify-content: flex-start;
-              gap: var(--cell-gap); height: 38px; width: 100%; align-self: end; }
-.fbar { flex: 1; min-width: 6px; max-width: 22px; border-radius: var(--cell-radius);
-        background: var(--tone, var(--unknown)); height: var(--h, 4%);
-        box-shadow: var(--cell-glow) var(--tone, transparent); }
-.fbar.is-unknown { background: var(--cell-bg); height: 100%; opacity: .55; }
+/* fleet: one mini ring per account */
+.ring-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+            align-self: center; }
 
 .provider { margin-top: 26px; }
 .provider-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 8px; }
@@ -170,9 +184,9 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
                  text-transform: uppercase; }
 .provider-count { color: var(--ink-3); font: 500 10px var(--mono); }
 
-.account { display: grid;
-           grid-template-columns: minmax(190px, 1.1fr) repeat(var(--win-cols, 2), minmax(150px, 1fr)) minmax(120px, .7fr);
-           gap: 16px; padding: 15px 16px; margin-top: 8px;
+.account { display: grid; align-items: start;
+           grid-template-columns: minmax(190px, 1.2fr) repeat(var(--win-cols, 2), minmax(118px, 1fr)) minmax(120px, .8fr);
+           gap: 16px; padding: 16px; margin-top: 8px;
            border: 1px solid var(--line); border-radius: var(--radius);
            background: var(--panel); box-shadow: var(--panel-shadow); }
 .account.is-held { opacity: .75; }
@@ -180,22 +194,35 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .acct-meta { margin-top: 5px; color: var(--ink-3); font: 500 9.5px/1.5 var(--mono); }
 .acct-meta span { display: inline-block; margin-right: 10px; }
 
+.win { display: flex; flex-direction: column; align-items: center;
+       text-align: center; gap: 7px; justify-content: flex-start; }
 .win-name { color: var(--ink-2); font: 700 9px/1.3 var(--mono);
             letter-spacing: .09em; text-transform: uppercase; }
-.win-value { float: right; font: 700 11px/1.3 var(--mono); }
-.meter { display: grid; grid-template-columns: repeat(10, 1fr); gap: var(--cell-gap);
-         height: var(--meter-height); margin-top: 7px; }
-.cell { position: relative; border-radius: var(--cell-radius); background: var(--cell-bg);
-        overflow: hidden; }
-.cell::after { content: ""; position: absolute; inset: 0; width: var(--fill, 0%);
-               background: var(--tone, var(--unknown));
-               box-shadow: var(--cell-glow) var(--tone, transparent); }
-.win-note { margin: 6px 0 0; color: var(--ink-3); font: 400 9px/1.4 var(--mono); }
+.win-note { margin: 0; color: var(--ink-3); font: 400 9px/1.4 var(--mono); }
+
+/* radial capacity meter: thin arc on a recessive track, value in the center */
+.ring { position: relative; width: 78px; height: 78px;
+        color: var(--tone, var(--unknown)); }
+.ring svg { width: 100%; height: 100%; display: block; transform: rotate(-90deg); }
+.ring-track { fill: none; stroke: var(--cell-bg); stroke-width: 6; }
+.ring-arc { fill: none; stroke: currentColor; stroke-width: 6;
+            stroke-linecap: round;
+            filter: drop-shadow(0 0 var(--glow-r) currentColor); }
+.ring-center { position: absolute; inset: 0; display: flex; flex-direction: column;
+               align-items: center; justify-content: center; gap: 1px; }
+.ring-value { font: 700 17px/1 var(--mono); color: var(--ink); }
+.ring-unit { font: 600 7.5px/1.3 var(--mono); color: var(--ink-3);
+             letter-spacing: .08em; text-transform: uppercase; }
+.ring--sm { width: 52px; height: 52px; }
+.ring--sm .ring-value { font-size: 12px; }
+.ring--sm .ring-unit { display: none; }
+.ring--xs { width: 30px; height: 30px; }
+.ring--xs .ring-value, .ring--xs .ring-unit { display: none; }
+.ring--xs .ring-track, .ring--xs .ring-arc { stroke-width: 9; }
+
 .tone-green { --tone: var(--green); } .tone-yellow { --tone: var(--yellow); }
 .tone-orange { --tone: var(--orange); } .tone-red { --tone: var(--red); }
 .tone-unknown { --tone: var(--unknown); }
-.win-value.tone-green { color: var(--green); } .win-value.tone-yellow { color: var(--yellow); }
-.win-value.tone-orange { color: var(--orange); } .win-value.tone-red { color: var(--red); }
 
 .state { text-align: right; }
 .state-badge { display: inline-flex; align-items: center; gap: 7px;
@@ -227,7 +254,7 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
           color: var(--ink-3); font: 500 9px/1.4 var(--mono);
           text-transform: uppercase; letter-spacing: .05em; }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
-.swatch { width: 16px; height: 5px; border-radius: 2px; background: var(--tone); }
+.swatch { width: 9px; height: 9px; border-radius: 50%; background: var(--tone); }
 .credit { margin-top: 26px; color: var(--ink-3); font: 500 9px var(--mono); }
 .credit a { color: var(--ink-2); }
 
@@ -235,6 +262,9 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
   .live-dot::after { animation: pulse 1.8s ease-out infinite; }
   @keyframes pulse { from { opacity: .6; transform: scale(.6); }
                      to { opacity: 0; transform: scale(1.6); } }
+  .ring-arc { transition: stroke-dashoffset .9s cubic-bezier(.16, 1, .3, 1); }
+  .account { transition: transform .25s ease, border-color .25s ease; }
+  .account:hover { transform: translateY(-2px); border-color: var(--line-strong); }
 }
 @media (max-width: 860px) {
   .summary { grid-template-columns: 1fr 1fr; }
@@ -266,6 +296,7 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
         <option value="chrome">Chrome</option>
         <option value="paper">Paper</option>
         <option value="terminal">Terminal</option>
+        <option value="bentho">Bentho</option>
       </select>
       <button class="refresh" id="refresh" type="button">Refresh</button>
     </div>
@@ -281,19 +312,17 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
     <div class="summary-item">
       <div class="summary-head"><span class="summary-label">Average left</span>
         <strong class="summary-value" id="average">–</strong></div>
-      <div class="viz"><div class="gauge" id="average-viz" role="img"
-        aria-label="Average remaining capacity"><span class="gauge-fill"></span>
-        <span class="gauge-ticks" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span></div></div>
+      <div class="viz viz--center" id="average-viz"></div>
       <p class="summary-note">all current windows</p></div>
     <div class="summary-item">
       <div class="summary-head"><span class="summary-label">Lowest tank</span>
         <strong class="summary-value" id="lowest">–</strong></div>
-      <div class="viz" id="lowest-viz"></div>
+      <div class="viz viz--center" id="lowest-viz"></div>
       <p class="summary-note" id="lowest-account">waiting for data</p></div>
     <div class="summary-item">
       <div class="summary-head"><span class="summary-label">Fleet · session left</span>
         <strong class="summary-value" id="account-count">–</strong></div>
-      <div class="viz"><div class="fleet-bars" id="fleet-viz" role="img"
+      <div class="viz"><div class="ring-row" id="fleet-viz" role="img"
         aria-label="Session headroom per account"></div></div>
       <p class="summary-note" id="account-note">–</p></div>
   </section>
@@ -343,23 +372,37 @@ function windowColumns(accounts){
 }
 
 /* -------------------------------------------------------------- render */
-function meterMarkup(left){
-  let cells="";
-  for(let i=0;i<10;i++){
-    const fill=left==null?0:clamp((left-10*i)*10,0,100);
-    cells+='<span class="cell" style="--fill:'+fill+'%"></span>';
-  }
-  return '<div class="meter tone-'+tone(left)+'" role="img" aria-label="'+(left==null?"unknown":Math.round(left)+"% remaining")+'">'+cells+"</div>";
+/* radial meter: capacity left as an arc sweeping clockwise from 12 o'clock */
+const RING_C=2*Math.PI*30;
+function ringMarkup(left,size,title){
+  const unknown=left==null;
+  const frac=unknown?0:clamp(left,0,100)/100;
+  const off=(RING_C*(1-frac)).toFixed(2);
+  const cls="ring"+(size?" ring--"+size:"")+" tone-"+tone(left);
+  const label=unknown?"unknown":Math.round(left)+"% remaining";
+  return '<div class="'+cls+'" role="img" aria-label="'+esc(label)+'"'+
+    (title?' title="'+esc(title)+'"':"")+'>'+
+    '<svg viewBox="0 0 72 72" aria-hidden="true">'+
+    '<circle class="ring-track" cx="36" cy="36" r="30"/>'+
+    '<circle class="ring-arc" cx="36" cy="36" r="30" stroke-dasharray="'+RING_C.toFixed(2)+
+    '" stroke-dashoffset="'+RING_C.toFixed(2)+'" data-off="'+off+'"/>'+
+    '</svg><div class="ring-center"><span class="ring-value">'+(unknown?"–":Math.round(left))+
+    "</span>"+(unknown?"":'<span class="ring-unit">% left</span>')+"</div></div>";
+}
+/* arcs render empty, then sweep to their value on the next frame (CSS
+   transition; disabled automatically under prefers-reduced-motion) */
+function armRings(){
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    document.querySelectorAll(".ring-arc[data-off]").forEach(el=>{
+      el.style.strokeDashoffset=el.dataset.off;});}));
 }
 function windowMarkup(account,key){
   const w=(account.windows||{})[key]||null;
   const left=capacity(w);
   const unknown=left==null;
-  const value=unknown?"n/a":Math.round(left)+"% left";
   const note=unknown?(w?"reading unavailable":(key.startsWith("scoped:")?"no scoped cap":"no reading yet")):untilReset(w.resets_at);
-  return '<div class="win"><span class="win-name">'+esc(windowLabel(key))+
-    '</span><span class="win-value tone-'+tone(left)+'">'+esc(value)+"</span>"+
-    meterMarkup(left)+'<p class="win-note">'+esc(note)+"</p></div>";
+  return '<div class="win"><span class="win-name">'+esc(windowLabel(key))+"</span>"+
+    ringMarkup(left)+'<p class="win-note">'+esc(note)+"</p></div>";
 }
 // Calm, specific state per account. Codex reads its CLI's own telemetry, so
 // idle/limited are EXPECTED states — label them clearly, never as "broken".
@@ -381,6 +424,9 @@ function accountState(account){
     return{cls:"idle",label:"Idle",note:"last seen "+age(account.captured_at)+" · run Codex to refresh"};
   if(isCodex&&/no .*telemetry|no rate_limits/i.test(account.note||""))
     return{cls:"idle",label:"Waiting",note:"run Codex once to start tracking"};
+  if(code==="usage_source_rate_limited")
+    return{cls:"held",label:"Rate-limited",note:"provider throttled the usage feed · "
+      +(Number.isFinite(account.retry_at)?untilReset(account.retry_at).replace("resets","retries"):"retries automatically")};
   return{cls:"held",label:"Held",note:account.note||account.error_code||"no verified reading"};
 }
 function accountMarkup(account,columns){
@@ -434,14 +480,11 @@ function render(data){
   /* top-bar instruments */
   document.getElementById("verified-viz").innerHTML=accounts.map(a=>
     '<span class="seg '+(isCurrent(a)?"is-on":"is-off")+'" title="'+esc(a.name)+": "+(isCurrent(a)?"verified":"held")+'"></span>').join("");
-  const gauge=document.getElementById("average-viz");
-  gauge.className="gauge tone-"+tone(avg);
-  gauge.querySelector(".gauge-fill").style.setProperty("--fill",(avg==null?0:avg)+"%");
-  document.getElementById("lowest-viz").innerHTML=meterMarkup(lowest?lowest.left:null);
+  document.getElementById("average-viz").innerHTML=ringMarkup(avg,"sm","average across current windows");
+  document.getElementById("lowest-viz").innerHTML=ringMarkup(lowest?lowest.left:null,"sm",lowest?lowest.who:"no current readings");
   document.getElementById("fleet-viz").innerHTML=accounts.map(a=>{
     const left=capacity((a.windows||{})["5h"]);
-    if(left==null)return'<span class="fbar is-unknown" title="'+esc(a.name)+': unknown"></span>';
-    return'<span class="fbar tone-'+tone(left)+'" style="--h:'+Math.max(4,left)+'%" title="'+esc(a.name)+": "+Math.round(left)+'% session left"></span>';
+    return ringMarkup(left,"xs",a.name+": "+(left==null?"unknown":Math.round(left)+"% session left"));
   }).join("");
   set("snapshot-age","snapshot "+age(data.generated));
   set("source-line",current.length+" of "+accounts.length+" verified");
@@ -449,9 +492,16 @@ function render(data){
     providerMarkup("claude",claude)+providerMarkup("codex",codex);
   const warnings=(data.integrity_warnings||[]).slice();
   if(snapStale)warnings.unshift("snapshot is over 30 minutes old — readings shown as held until a fresh collect");
+  const throttled=accounts.filter(a=>a.error_code==="usage_source_rate_limited");
+  if(throttled.length===accounts.length&&accounts.length){
+    const soonest=Math.min(...throttled.map(a=>Number.isFinite(a.retry_at)?a.retry_at:Infinity));
+    warnings.unshift("the provider rate-limited the usage feed — "
+      +(Number.isFinite(soonest)?untilReset(soonest).replace("resets","readings resume"):"readings resume automatically"));
+  }
   const status=document.getElementById("status");
-  status.textContent=warnings.length?("⚠ "+warnings.join(" — ")):"Full meters are available capacity. Colors show what's left, not what's used.";
+  status.textContent=warnings.length?("⚠ "+warnings.join(" — ")):"Full rings are available capacity. Colors show what's left, not what's used.";
   status.className="statusline"+(warnings.length?" is-error":"");
+  armRings();
 }
 function renderError(message){
   document.getElementById("providers").innerHTML=
@@ -521,6 +571,7 @@ picker.addEventListener("change",()=>applyTheme(picker.value));
   document.getElementById("refresh").addEventListener("click",()=>load(true));
   load(false);
   setInterval(()=>load(false),6e4);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)load(false);});
 })();
 </script>
 </body>

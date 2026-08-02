@@ -12,12 +12,15 @@ usage:
   headroom claude [args...]         launch Claude Code on the best account
   headroom codex [args...]          launch Codex on the best account
   headroom run <model> -- <cmd...>  headless run with auto-rotation on limit-hit
-  headroom rotate [model]           cool the current account down, pick the next
+  headroom rotate [model] [--launch]
+                                    cool the current account down, pick the next;
+                                    --launch relaunches Claude Code on it and
+                                    continues this project's conversation
   headroom mark <name> <model> [epoch]   manual cooldown
   headroom clear [name:family]      clear cooldown(s)
   headroom repin <name>             re-bind a Claude slot's usage org
   headroom dashboard [--demo]       (re)build the static dashboard
-  headroom serve [--open] [--port N] [--demo]   local live dashboard
+  headroom serve [--no-open] [--port N] [--demo]   local live dashboard
   headroom statusline               Claude Code status line output
   headroom accounts                 list connected accounts
   headroom share-history            share chats/history across all Claude accounts
@@ -125,7 +128,11 @@ def _dispatch(argv):
         return route.cmd_run(registry.family(args[0]), args[separator + 1:])
     if command == "rotate":
         from . import route
-        return route.cmd_rotate(registry.family(args[0] if args else "claude"))
+        launch = "--launch" in args
+        positional = [a for a in args if not a.startswith("--")]
+        return route.cmd_rotate(
+            registry.family(positional[0] if positional else "claude"),
+            launch=launch)
     if command == "mark":
         import time
 
@@ -217,10 +224,12 @@ def _dispatch(argv):
                 if not 1 <= port <= 65535:
                     raise ValueError
             except (IndexError, ValueError):
-                print("usage: headroom serve [--open] [--port 1-65535] [--demo]",
+                print("usage: headroom serve [--no-open] [--port 1-65535] [--demo]",
                       file=sys.stderr)
                 return 2
-        return dashboard.serve(open_browser="--open" in args, port=port,
+        # opens the browser by default; --no-open for headless/scripted use
+        # (--open still accepted for backwards compatibility)
+        return dashboard.serve(open_browser="--no-open" not in args, port=port,
                                demo="--demo" in args) or 0
     if command == "statusline":
         from . import statusline

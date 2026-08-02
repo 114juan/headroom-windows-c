@@ -527,6 +527,102 @@ class LockAndConcurrencyTests(unittest.TestCase):
                 self.assertEqual(f.read(), "source")
 
 
+class ConversationSync(unittest.TestCase):
+    """sync_project must carry the current project's transcripts to the
+    successor home on rotation — copy-if-newer, junction-aware, fail-soft."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="hr-sync-")
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+
+    def _home(self, name, files=None):
+        from headroom import history_sync
+        home = os.path.join(self.tmp, name)
+        slug = history_sync.project_slug(self.tmp)
+        project = os.path.join(home, "projects", slug)
+        os.makedirs(project, exist_ok=True)
+        for fname, content in (files or {}).items():
+            with open(os.path.join(project, fname), "w", encoding="utf-8") as f:
+                f.write(content)
+        return home, project
+
+    def test_slug_matches_claude_code_format(self):
+        from headroom import history_sync
+        slug = history_sync.project_slug(r"C:\Users\USER\.headroom") \
+            if os.name == "nt" else history_sync.project_slug("/home/u/.headroom")
+        self.assertNotIn(os.sep, slug)
+        self.assertRegex(slug, r"^[A-Za-z0-9-]+$")
+
+    def test_copies_transcripts_to_successor(self):
+        from headroom import history_sync
+        src_home, _ = self._home("a", {"s1.jsonl": "hello"})
+        dst_home, dst_proj = self._home("b")
+        copied = history_sync.sync_project(src_home, dst_home, cwd=self.tmp)
+        self.assertEqual(copied, 1)
+        with open(os.path.join(dst_proj, "s1.jsonl"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "hello")
+
+    def test_never_clobbers_newer_destination(self):
+        from headroom import history_sync
+        src_home, src_proj = self._home("a", {"s1.jsonl": "old"})
+        dst_home, dst_proj = self._home("b", {"s1.jsonl": "newer"})
+        past = time.time() - 3600
+        os.utime(os.path.join(src_proj, "s1.jsonl"), (past, past))
+        copied = history_sync.sync_project(src_home, dst_home, cwd=self.tmp)
+        self.assertEqual(copied, 0)
+        with open(os.path.join(dst_proj, "s1.jsonl"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "newer")
+
+    def test_same_physical_dir_reports_shared(self):
+        from headroom import history_sync
+        src_home, _ = self._home("a", {"s1.jsonl": "x"})
+        result = history_sync.sync_project(src_home, src_home, cwd=self.tmp)
+        self.assertEqual(result, "shared")
+
+    def test_no_transcripts_returns_none(self):
+        from headroom import history_sync
+        src_home = os.path.join(self.tmp, "empty-src")
+        dst_home, _ = self._home("b")
+        self.assertIsNone(
+            history_sync.sync_project(src_home, dst_home, cwd=self.tmp))
+
+
+class DashboardServer(unittest.TestCase):
+    """QuietServer must swallow client-side disconnects (browser reloads abort
+    the socket mid-write — WinError 10053 / ECONNRESET) but still report real
+    faults through the stdlib traceback path."""
+
+    def _server(self):
+        from headroom import dashboard
+        server = dashboard.QuietServer.__new__(dashboard.QuietServer)
+        return server
+
+    def _handle_error_with(self, exc):
+        import io
+        from unittest.mock import patch
+        server = self._server()
+        stderr = io.StringIO()
+        try:
+            raise exc
+        except Exception:
+            with patch("sys.stderr", stderr):
+                server.handle_error(None, ("127.0.0.1", 1234))
+        return stderr.getvalue()
+
+    def test_connection_abort_is_silenced(self):
+        out = self._handle_error_with(ConnectionAbortedError(10053, "aborted"))
+        self.assertEqual(out, "")
+
+    def test_connection_reset_is_silenced(self):
+        out = self._handle_error_with(ConnectionResetError(10054, "reset"))
+        self.assertEqual(out, "")
+
+    def test_real_errors_still_reported(self):
+        out = self._handle_error_with(ValueError("boom"))
+        self.assertIn("ValueError", out)
+
+
 if __name__ == "__main__":
     unittest.main()
 
