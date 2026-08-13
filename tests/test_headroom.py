@@ -206,6 +206,40 @@ class PublicSnapshot(unittest.TestCase):
         pub = collect.public_snapshot(snap, redact_emails=True)
         self.assertEqual(pub["accounts"][0]["email"], "p***@x.com")
 
+    def test_public_fields_whitelist_unchanged(self):
+        self.assertEqual(collect.PUBLIC_FIELDS, {
+            "name", "email", "provider", "plan", "ok", "note", "error_code",
+            "retry_at", "captured_at", "source", "stale", "windows",
+            "identity_verified", "identity_method", "trust_state", "routable",
+            "subscription",
+        })
+
+    def test_binding_note_includes_connect_command(self):
+        note = collect.binding_note(
+            "claude_local_binding_missing",
+            {"name": "mykwaadriana-fresh",
+             "expected_email": "adriana.piracoca@mykywa.com"})
+        self.assertIn("headroom connect mykwaadriana-fresh", note)
+        self.assertIn("adriana.piracoca@mykywa.com", note)
+
+    def test_binding_note_unexpected_email(self):
+        note = collect.binding_note(
+            "slot_bound_to_unexpected_email",
+            {"name": "work", "expected_email": "a@x.com"},
+            {"email": "b@x.com"})
+        self.assertIn("b@x.com", note)
+        self.assertIn("a@x.com", note)
+        self.assertIn("headroom remove work", note)
+
+    def test_binding_note_refresh_expired(self):
+        note = collect.binding_note(
+            "claude_refresh_expired",
+            {"name": "juanquijano",
+             "expected_email": "jquijanobustos@gmail.com"})
+        self.assertIn("refresh token expired", note)
+        self.assertIn("headroom connect juanquijano", note)
+        self.assertIn("jquijanobustos@gmail.com", note)
+
 
 class CodexWindowMapping(unittest.TestCase):
     """The app-server reports windows by real duration and omits any that is
@@ -623,6 +657,360 @@ class DashboardServer(unittest.TestCase):
         self.assertIn("ValueError", out)
 
 
+class IsolatedHeadroom(unittest.TestCase):
+    """Every test gets its own HEADROOM_DIR so mutate() cannot touch the
+    operator's real ~/.headroom/config.json."""
+
+    def setUp(self):
+        import json
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self._old_dir = os.environ.get("HEADROOM_DIR")
+        os.environ["HEADROOM_DIR"] = self.tmpdir
+        self.home1 = os.path.join(self.tmpdir, "homes", "acct1")
+        self.home2 = os.path.join(self.tmpdir, "homes", "acct2")
+        os.makedirs(self.home1)
+        os.makedirs(self.home2)
+        with open(os.path.join(self.home1, ".credentials.json"), "w",
+                  encoding="utf-8") as handle:
+            handle.write('{"claudeAiOauth": {"accessToken": "secret"}}')
+        with open(os.path.join(self.home1, ".claude.json"), "w",
+                  encoding="utf-8") as handle:
+            json.dump({"oauthAccount": {"emailAddress": "test@test.com"}},
+                      handle)
+        self.config = self._write_config([
+            {"name": "acct1", "provider": "claude", "home": self.home1,
+             "expected_email": "test@test.com",
+             "pinned_usage_org": "abc123"},
+            {"name": "acct2", "provider": "claude", "home": self.home2,
+             "expected_email": "other@test.com"},
+        ])
+
+    def tearDown(self):
+        import shutil
+        if self._old_dir is None:
+            os.environ.pop("HEADROOM_DIR", None)
+        else:
+            os.environ["HEADROOM_DIR"] = self._old_dir
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_config(self, accounts):
+        from headroom import registry
+        config = {"schema_version": 1, "accounts": accounts}
+        registry.save(config)
+        return config
+
+
+class AccountLifecycle(IsolatedHeadroom):
+    def test_clear_token_removes_credentials_keeps_email(self):
+        import json
+        from headroom import connect, registry
+        ok, msg = connect.clear_token(self.config, "acct1")
+        self.assertTrue(ok)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.home1, ".credentials.json")))
+        with open(os.path.join(self.home1, ".claude.json"),
+                  encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertNotIn("oauthAccount", data)
+        saved = registry.load()
+        slot = next(a for a in saved["accounts"] if a["name"] == "acct1")
+        self.assertEqual(slot["expected_email"], "test@test.com")
+        self.assertNotIn("pinned_usage_org", slot)
+
+    def test_clear_token_unknown_account_fails(self):
+        from headroom import connect
+        ok, msg = connect.clear_token(self.config, "unknown")
+        self.assertFalse(ok)
+        self.assertIn("no account found", msg)
+
+    def test_add_account_existing_unpins_and_updates_email(self):
+        from headroom import connect, registry
+        connect.add_account(self.config, "acct1", "claude", self.home1,
+                            "new@test.com")
+        saved = registry.load()
+        slot = next(a for a in saved["accounts"] if a["name"] == "acct1")
+        self.assertEqual(slot["expected_email"], "new@test.com")
+        self.assertNotIn("pinned_usage_org", slot)
+
+    def test_cmd_connect_existing_name_relgins(self):
+        from unittest.mock import patch
+        from headroom import connect
+        with patch.object(connect, "connect_fresh",
+                          return_value={"name": "acct1"}) as mocked:
+            code = connect.cmd_connect(["acct1"])
+        self.assertEqual(code, 0)
+        mocked.assert_called_once()
+        self.assertEqual(mocked.call_args[0][1], "acct1")
+
+    def test_remove_account_drops_slot_keeps_home(self):
+        from headroom import connect, registry
+        ok, msg = connect.remove_account(self.config, "acct2")
+        self.assertTrue(ok)
+        saved = registry.load()
+        self.assertEqual([a["name"] for a in saved["accounts"]], ["acct1"])
+        self.assertTrue(os.path.isdir(self.home2))
+        self.assertIn("home left in place", msg)
+
+    def test_remove_last_account_refused(self):
+        from headroom import connect, registry
+        connect.remove_account(self.config, "acct2")
+        ok, msg = connect.remove_account(registry.load(), "acct1")
+        self.assertFalse(ok)
+        self.assertIn("last account", msg)
+        self.assertEqual(len(registry.load()["accounts"]), 1)
+
+    def test_apply_mutation_disabled_in_demo(self):
+        from headroom import dashboard
+        status, payload = dashboard.apply_mutation(
+            "/api/clear-token", "acct1", demo=True)
+        self.assertEqual(status, 400)
+        self.assertFalse(payload["ok"])
+        self.assertIn("demo", payload["error"])
+        status, payload = dashboard.apply_mutation(
+            "/api/remove", "acct1", demo=True)
+        self.assertEqual(status, 400)
+
+    def test_apply_mutation_missing_account(self):
+        from headroom import dashboard
+        status, payload = dashboard.apply_mutation("/api/remove", None)
+        self.assertEqual(status, 400)
+        self.assertIn("missing account", payload["error"])
+
+    def test_doctor_lines_held_slot(self):
+        from headroom import __main__ as main
+        snapshot = {"accounts": [{
+            "name": "acct1", "ok": False,
+            "error_code": "claude_local_binding_missing",
+        }]}
+        lines = main._doctor_account_lines(
+            [{"name": "acct1", "provider": "claude", "home": self.home1}],
+            snapshot)
+        joined = "\n".join(lines)
+        self.assertIn("HELD", joined)
+        self.assertIn("headroom connect acct1", joined)
+
+    def test_doctor_lines_refresh_expired(self):
+        from headroom import __main__ as main
+        snapshot = {"accounts": [{
+            "name": "acct1", "ok": False,
+            "error_code": "claude_refresh_expired",
+        }]}
+        lines = main._doctor_account_lines(
+            [{"name": "acct1", "provider": "claude", "home": self.home1}],
+            snapshot)
+        joined = "\n".join(lines)
+        self.assertIn("claude_refresh_expired", joined)
+        self.assertIn("headroom connect acct1", joined)
+
+
+class _ScriptedOpener:
+    """urlopen stand-in: each call pops (status, payload)."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+
+    def __call__(self, request, timeout):
+        import io
+        import json
+        import urllib.error
+        url = getattr(request, "full_url", None) or request.get_full_url()
+        self.calls.append(url)
+        if not self.script:
+            raise AssertionError("unexpected request to %s" % url)
+        status, payload = self.script.pop(0)
+        if status >= 400:
+            body = b'{"error":"invalid_grant"}' if payload is None \
+                else json.dumps(payload).encode()
+            raise urllib.error.HTTPError(
+                url, status, "error", {}, io.BytesIO(body))
+
+        class _Resp:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *args):
+                return False
+
+            def read(self_inner):
+                return json.dumps(payload).encode()
+
+        return _Resp()
+
+
+class ClaudeTokenRefresh(unittest.TestCase):
+    """HTTP OAuth refresh — never the CLI, never inference."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self.home = os.path.join(self.tmpdir, "slot")
+        os.makedirs(self.home)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_oauth(self, **over):
+        from headroom import paths
+        oauth = {
+            "accessToken": "old-access",
+            "refreshToken": "old-refresh",
+            "expiresAt": int(time.time() * 1000) + 8 * 3600 * 1000,
+            "subscriptionType": "max",
+            "rateLimitTier": "default_claude_max_5x",
+            "scopes": ["user:inference", "user:profile"],
+        }
+        oauth.update(over)
+        paths.write_json_atomic(
+            os.path.join(self.home, ".credentials.json"),
+            {"claudeAiOauth": oauth}, mode=0o600)
+        return oauth
+
+    def _read_oauth(self):
+        from headroom import paths
+        return (paths.load_json(os.path.join(self.home, ".credentials.json"))
+                or {}).get("claudeAiOauth") or {}
+
+    def test_refresh_needed_access_near_expiry(self):
+        now = 1_700_000_000
+        oauth = {"expiresAt": (now + 60) * 1000}
+        self.assertTrue(collect.refresh_needed(oauth, now=now))
+
+    def test_refresh_needed_refresh_near_expiry(self):
+        now = 1_700_000_000
+        oauth = {
+            "expiresAt": (now + 8 * 3600) * 1000,
+            "refreshTokenExpiresAt": (now + 600) * 1000,
+        }
+        self.assertTrue(collect.refresh_needed(oauth, now=now))
+
+    def test_refresh_needed_does_not_loop_when_refresh_dies_first(self):
+        # refresh expires in 3h, access in 8h — do NOT refresh every collect
+        now = 1_700_000_000
+        oauth = {
+            "expiresAt": (now + 8 * 3600) * 1000,
+            "refreshTokenExpiresAt": (now + 3 * 3600) * 1000,
+        }
+        self.assertFalse(collect.refresh_needed(oauth, now=now))
+
+    def test_refresh_needed_refresh_already_past(self):
+        now = 1_700_000_000
+        oauth = {
+            "expiresAt": (now + 4 * 3600) * 1000,
+            "refreshTokenExpiresAt": (now - 60) * 1000,
+        }
+        self.assertTrue(collect.refresh_needed(oauth, now=now))
+
+    def test_refresh_200_rewrites_tokens_keeps_subscription(self):
+        from unittest.mock import patch
+        self._write_oauth()
+        opener = _ScriptedOpener([(200, {
+            "access_token": "new-access",
+            "refresh_token": "new-refresh",
+            "expires_in": 3600,
+            "refresh_expires_in": 7200,
+            "scope": "user:inference user:profile",
+        })])
+        with patch("subprocess.run") as runner:
+            self.assertTrue(collect.refresh_claude_token(
+                self.home, opener=opener, now=time.time()))
+            runner.assert_not_called()
+        oauth = self._read_oauth()
+        self.assertEqual(oauth["accessToken"], "new-access")
+        self.assertEqual(oauth["refreshToken"], "new-refresh")
+        self.assertEqual(oauth["subscriptionType"], "max")
+        self.assertEqual(oauth["rateLimitTier"], "default_claude_max_5x")
+        self.assertAlmostEqual(
+            oauth["expiresAt"] / 1000, time.time() + 3600, delta=5)
+        self.assertAlmostEqual(
+            oauth["refreshTokenExpiresAt"] / 1000, time.time() + 7200, delta=5)
+        self.assertTrue(opener.calls[0].startswith(
+            "https://platform.claude.com/"))
+
+    def test_primary_404_falls_back_to_legacy(self):
+        self._write_oauth()
+        opener = _ScriptedOpener([
+            (404, None),
+            (200, {"access_token": "legacy-access", "expires_in": 1800}),
+        ])
+        self.assertTrue(collect.refresh_claude_token(
+            self.home, opener=opener))
+        self.assertEqual(self._read_oauth()["accessToken"], "legacy-access")
+        self.assertEqual(len(opener.calls), 2)
+        self.assertIn("console.anthropic.com", opener.calls[1])
+
+    def test_invalid_grant_raises_expired_no_cli(self):
+        from unittest.mock import patch
+        self._write_oauth()
+        opener = _ScriptedOpener([(400, {"error": "invalid_grant"})])
+        with patch("subprocess.run") as runner:
+            with self.assertRaises(collect.IdentityBindingError) as ctx:
+                collect.refresh_claude_token(self.home, opener=opener)
+            self.assertEqual(ctx.exception.code, "claude_refresh_expired")
+            runner.assert_not_called()
+
+    def test_stale_refresh_timestamp_still_posts(self):
+        # local expiry stamp is in the past — still try the server
+        self._write_oauth(refreshTokenExpiresAt=int(time.time() * 1000) - 60_000)
+        opener = _ScriptedOpener([(200, {
+            "access_token": "still-good",
+            "expires_in": 3600,
+        })])
+        self.assertTrue(collect.refresh_claude_token(self.home, opener=opener))
+        self.assertEqual(self._read_oauth()["accessToken"], "still-good")
+        self.assertNotIn("refreshTokenExpiresAt", self._read_oauth())
+
+    def test_missing_refresh_token_raises(self):
+        self._write_oauth(refreshToken=None)
+        opener = _ScriptedOpener([])
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.refresh_claude_token(self.home, opener=opener)
+        self.assertEqual(ctx.exception.code, "claude_refresh_expired")
+        self.assertEqual(opener.calls, [])
+
+    def test_rotated_refresh_without_expiry_gets_default_ttl(self):
+        self._write_oauth()
+        opener = _ScriptedOpener([(200, {
+            "access_token": "a2",
+            "refresh_token": "r2",
+            "expires_in": 3600,
+        })])
+        collect.refresh_claude_token(self.home, opener=opener)
+        oauth = self._read_oauth()
+        self.assertAlmostEqual(
+            oauth["refreshTokenExpiresAt"] / 1000,
+            time.time() + collect.DEFAULT_REFRESH_TTL, delta=5)
+
+    def test_identity_uses_local_metadata_skips_cli(self):
+        import json
+        from unittest.mock import patch
+        with open(os.path.join(self.home, ".claude.json"), "w",
+                  encoding="utf-8") as handle:
+            json.dump({"oauthAccount": {
+                "emailAddress": "a@x.com",
+                "organizationUuid": "org-1",
+            }}, handle)
+        with open(os.path.join(self.home, ".credentials.json"), "w",
+                  encoding="utf-8") as handle:
+            handle.write('{"claudeAiOauth": {"accessToken": "x"}}')
+        with patch("subprocess.run") as runner:
+            identity = collect.claude_identity(self.home)
+        self.assertEqual(identity["email"], "a@x.com")
+        self.assertEqual(identity["method"], "claude_local_metadata")
+        runner.assert_not_called()
+
+    def test_identity_missing_creds_skips_cli(self):
+        from unittest.mock import patch
+        with patch("subprocess.run") as runner:
+            with self.assertRaises(collect.IdentityBindingError) as ctx:
+                collect.claude_identity(self.home)
+        self.assertEqual(ctx.exception.code, "claude_local_binding_missing")
+        runner.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

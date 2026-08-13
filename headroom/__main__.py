@@ -4,7 +4,8 @@ for Claude Code and Codex subscriptions.
 usage:
   headroom setup                    first-run wizard (accounts + dashboard style)
   headroom connect [name] [--provider claude|codex] [--adopt PATH]
-                                    add an account (fresh login or adopt existing)
+                                    add an account, or re-login an existing slot
+  headroom reconnect <name>         re-login an existing slot (same as connect)
   headroom collect                  read usage for every account (no tokens spent)
   headroom status [model]           who has headroom right now (default: claude)
   headroom pick <model>             print the best account name (exit 2 if none)
@@ -18,6 +19,8 @@ usage:
                                     continues this project's conversation
   headroom mark <name> <model> [epoch]   manual cooldown
   headroom clear [name:family]      clear cooldown(s)
+  headroom clear-token <name>       delete stored token/credentials for an account
+  headroom remove <name>            drop a slot from the registry (home kept)
   headroom repin <name>             re-bind a Claude slot's usage org
   headroom dashboard [--demo]       (re)build the static dashboard
   headroom serve [--no-open] [--port N] [--demo]   local live dashboard
@@ -58,6 +61,46 @@ def main(argv=None):
         return 1
 
 
+def _slot_has_creds(account):
+    import os
+    home = account.get("home") or ""
+    filename = ".credentials.json" if account.get("provider") == "claude" \
+        else "auth.json"
+    return os.path.isfile(os.path.join(home, filename))
+
+
+def _doctor_account_lines(accounts, snapshot):
+    from . import collect as collector
+    rows = {row.get("name"): row
+            for row in (snapshot or {}).get("accounts", [])
+            if isinstance(row, dict) and row.get("name")}
+    lines = []
+    for account in accounts:
+        name = account["name"]
+        row = rows.get(name) or {}
+        creds = _slot_has_creds(account)
+        if row.get("ok") is True:
+            windows = row.get("windows") or {}
+            head = "5h=%s 7d=%s" % (
+                collector.display_percent(windows.get("5h")),
+                collector.display_percent(windows.get("7d")))
+            lines.append(f"  {name:<22} ok     {head}")
+            continue
+        if row.get("error_code"):
+            lines.append(f"  {name:<22} HELD   {row['error_code']}")
+            if row["error_code"] in collector.RECONNECT_CODES or not creds:
+                lines.append(f"  {'':<22} next:  headroom connect {name}")
+            continue
+        if not creds:
+            lines.append(f"  {name:<22} NO CREDS")
+            lines.append(f"  {'':<22} next:  headroom connect {name}")
+        elif not row:
+            lines.append(f"  {name:<22} unknown (no snapshot row)")
+        else:
+            lines.append(f"  {name:<22} held   {row.get('note') or 'not ok'}")
+    return lines
+
+
 def _dispatch(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
@@ -73,6 +116,22 @@ def _dispatch(argv):
     if command == "connect":
         from . import connect
         return connect.cmd_connect(args)
+    if command == "reconnect":
+        from . import connect
+        if not args or args[0].startswith("-"):
+            print("usage: headroom reconnect <account>", file=sys.stderr)
+            return 2
+        try:
+            config = registry.load()
+        except registry.RegistryError as error:
+            print(f"headroom: {error}", file=sys.stderr)
+            return 1
+        known = {account["name"] for account in config.get("accounts", [])}
+        if args[0] not in known:
+            print(f"headroom: no connected account named {args[0]!r} "
+                  f"(have: {', '.join(sorted(known)) or 'none'})", file=sys.stderr)
+            return 2
+        return connect.cmd_connect([args[0]])
     if command == "collect":
         from . import collect
         collect.run_collect()
@@ -176,6 +235,41 @@ def _dispatch(argv):
             cleared = bool(hit)
         print(f"cleared {args[0]}" if cleared else f"no cooldown matching {args[0]!r}")
         return 0
+    if command in ("clear-token", "logout"):
+        from . import collect, connect
+        if not args:
+            print("usage: headroom clear-token <account_name_or_email>", file=sys.stderr)
+            return 2
+        try:
+            config = registry.load()
+        except registry.RegistryError as error:
+            print(f"headroom: {error}", file=sys.stderr)
+            return 1
+        ok, msg = connect.clear_token(config, args[0])
+        if ok:
+            collect.run_collect(quiet=True)
+            print(msg)
+            return 0
+        else:
+            print(f"headroom: {msg}", file=sys.stderr)
+            return 1
+    if command == "remove":
+        from . import collect, connect
+        if not args:
+            print("usage: headroom remove <account_name_or_email>", file=sys.stderr)
+            return 2
+        try:
+            config = registry.load()
+        except registry.RegistryError as error:
+            print(f"headroom: {error}", file=sys.stderr)
+            return 1
+        ok, msg = connect.remove_account(config, args[0])
+        if ok:
+            collect.run_collect(quiet=True)
+            print(msg)
+            return 0
+        print(f"headroom: {msg}", file=sys.stderr)
+        return 1
     if command == "repin":
         # clear a Claude slot's remembered usage-org so it re-pins on the next
         # collect (use if a legitimate multi-org account started holding with
@@ -269,6 +363,7 @@ def _dispatch(argv):
                   + ", ".join(a["name"] for a in accts))
         except registry.RegistryError as error:
             print(f"accounts   none ({error})")
+            accts = []
         snap = paths.load_json(paths.private_snapshot_path())
         if snap and snap.get("generated"):
             import time
@@ -276,6 +371,8 @@ def _dispatch(argv):
             print(f"snapshot   {age}s old, {len(snap.get('accounts', []))} accounts")
         else:
             print("snapshot   none yet (run `headroom collect`)")
+        for line in _doctor_account_lines(accts, snap):
+            print(line)
         return 0
     if command == "accounts":
         try:

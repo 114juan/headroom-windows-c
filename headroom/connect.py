@@ -116,22 +116,43 @@ def add_account(config, name, provider, home, expected_email=None):
     if expected_email:
         entry["expected_email"] = expected_email
 
-    def _append(cfg):
-        if not any(a.get("name") == name for a in cfg.get("accounts", [])):
-            cfg.setdefault("accounts", []).append(dict(entry))
+    previous_email = None
+    for acct in config.get("accounts", []):
+        if acct.get("name") == name:
+            previous_email = acct.get("expected_email")
+            break
+
+    def _upsert(cfg):
+        for acct in cfg.get("accounts", []):
+            if acct.get("name") == name:
+                # re-login: drop the old usage-org pin so the next collect
+                # re-binds to whatever org this login actually reports
+                acct.update(entry)
+                acct.pop("pinned_usage_org", None)
+                return
+        cfg.setdefault("accounts", []).append(dict(entry))
 
     try:
         # locked reload-append against the latest on-disk config, so a
         # concurrent collector pin-write or connect can't drop this account
-        registry.mutate(_append)
+        registry.mutate(_upsert)
     except registry.RegistryError:
         # config doesn't exist yet (wizard building a fresh one) — create it
         config.setdefault("accounts", []).append(entry)
         registry.save(config)
         return entry
     # reflect into the caller's in-memory config too (the wizard keeps using it)
-    if not any(a.get("name") == name for a in config.get("accounts", [])):
+    for acct in config.get("accounts", []):
+        if acct.get("name") == name:
+            acct.update(entry)
+            acct.pop("pinned_usage_org", None)
+            break
+    else:
         config.setdefault("accounts", []).append(entry)
+    if (previous_email and expected_email
+            and previous_email.lower() != expected_email.lower()):
+        print(f"warning: slot '{name}' expected {previous_email}, "
+              f"now bound to {expected_email}", file=sys.stderr)
     return entry
 
 
@@ -153,6 +174,11 @@ def connect_fresh(config, name, provider, quiet=False):
               file=sys.stderr)
         return None
     os.makedirs(home, mode=0o700, exist_ok=True)
+    existing = next((a for a in config.get("accounts", [])
+                     if a.get("name") == name), None)
+    if existing and not quiet:
+        expected = existing.get("expected_email") or "unknown"
+        print(f"re-login slot '{name}' (expected {expected})")
     backup_dir, saved = backup_credentials(home, provider)
     duplicates = existing_fingerprints(config, provider)
 
@@ -183,7 +209,7 @@ def connect_fresh(config, name, provider, quiet=False):
                   file=sys.stderr)
             return None
         fingerprint = identity.get("account_fingerprint")
-        if fingerprint in duplicates:
+        if fingerprint in duplicates and duplicates[fingerprint] != name:
             print(f"REFUSED: that login ({identity['email']}) is already "
                   f"connected as slot '{duplicates[fingerprint]}'. Slot rolled "
                   f"back.\nLog in with a different account, or use the "
@@ -215,7 +241,7 @@ def connect_adopt(config, name, provider, home, quiet=False):
         return None
     duplicates = existing_fingerprints(config, provider)
     fingerprint = identity.get("account_fingerprint")
-    if fingerprint in duplicates:
+    if fingerprint in duplicates and duplicates[fingerprint] != name:
         print(f"that login ({identity['email']}) is already connected as slot "
               f"'{duplicates[fingerprint]}'", file=sys.stderr)
         return None
@@ -251,19 +277,28 @@ def cmd_connect(args):
             adopt_path = rest.pop(0)
         elif not arg.startswith("-") and name is None:
             name = arg
-    if provider not in registry.PROVIDERS:
-        provider = prompt_choice("Which provider is this account for?",
-                                 ["claude", "codex"])
-    if name is None:
-        taken = {account["name"] for account in config.get("accounts", [])}
-        default = next(
-            candidate for candidate in
-            [f"{provider}-{index}" for index in range(1, 100)]
-            if candidate not in taken)
-        name = input(f"Slot name for this account [{default}]: ").strip() or default
-    if any(account.get("name") == name for account in config.get("accounts", [])):
-        print(f"slot '{name}' already exists", file=sys.stderr)
-        return 1
+
+    existing_acct = next((a for a in config.get("accounts", []) if a.get("name") == name), None)
+    if existing_acct:
+        if adopt_path:
+            print(f"slot '{name}' already exists", file=sys.stderr)
+            return 1
+        provider = existing_acct.get("provider", provider or "claude")
+    else:
+        if provider not in registry.PROVIDERS:
+            provider = prompt_choice("Which provider is this account for?",
+                                     ["claude", "codex"])
+        if name is None:
+            taken = {account["name"] for account in config.get("accounts", [])}
+            default = next(
+                candidate for candidate in
+                [f"{provider}-{index}" for index in range(1, 100)]
+                if candidate not in taken)
+            name = input(f"Slot name for this account [{default}]: ").strip() or default
+        if any(account.get("name") == name for account in config.get("accounts", [])):
+            print(f"slot '{name}' already exists", file=sys.stderr)
+            return 1
+
     entry = (connect_adopt(config, name, provider, adopt_path)
              if adopt_path else connect_fresh(config, name, provider))
     return 0 if entry else 1
@@ -283,3 +318,103 @@ def prompt_choice(question, options, default_index=0):
         if raw in options:
             return raw
         print("pick a number from the list")
+
+
+def find_account(config, name_or_email):
+    """Match a slot by name or expected_email (case-insensitive)."""
+    name_clean = str(name_or_email or "").strip().lower()
+    if not name_clean:
+        return None
+    for account in registry.accounts(config):
+        if account.get("name", "").lower() == name_clean \
+                or account.get("expected_email", "").lower() == name_clean:
+            return account
+    return None
+
+
+def remove_account(config, name_or_email):
+    """Drop a slot from the registry. The home directory is left in place
+    (share-history junctions may point at shared_claude_state)."""
+    account = find_account(config, name_or_email)
+    if not account:
+        return False, f"no account found matching {name_or_email!r}"
+    name = account["name"]
+
+    def _drop(cfg):
+        before = cfg.get("accounts", [])
+        remaining = [entry for entry in before if entry.get("name") != name]
+        if len(remaining) == len(before):
+            raise registry.RegistryError(f"no account named {name!r}")
+        if not remaining:
+            raise registry.RegistryError(
+                "refusing to remove the last account "
+                "(run `headroom setup` to start over)")
+        cfg["accounts"] = remaining
+
+    try:
+        registry.mutate(_drop)
+    except registry.RegistryError as error:
+        return False, str(error)
+    config["accounts"] = [entry for entry in config.get("accounts", [])
+                          if entry.get("name") != name]
+    email_str = f" ({account['expected_email']})" if account.get("expected_email") else ""
+    return True, f"removed slot '{name}'{email_str} (home left in place)"
+
+
+def clear_token(config, name_or_email):
+    """Delete file-based tokens and credentials for a given account slot or email."""
+    account = find_account(config, name_or_email)
+    if not account:
+        return False, f"no account found matching {name_or_email!r}"
+
+    home = account["home"]
+    removed = []
+
+    failed = []
+    if os.path.isdir(home):
+        target_files = [".credentials.json", "auth.json", "mcp-needs-auth-cache.json"]
+        for fname in target_files:
+            fpath = os.path.join(home, fname)
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                    removed.append(fname)
+                except OSError:
+                    failed.append(fname)
+
+        import glob
+        for tmp_file in glob.glob(os.path.join(home, ".claude.json.tmp.*")):
+            try:
+                os.remove(tmp_file)
+                removed.append(os.path.basename(tmp_file))
+            except OSError:
+                failed.append(os.path.basename(tmp_file))
+
+        claude_json_path = os.path.join(home, ".claude.json")
+        if os.path.exists(claude_json_path):
+            data = paths.load_json(claude_json_path)
+            if isinstance(data, dict) and "oauthAccount" in data:
+                try:
+                    data.pop("oauthAccount", None)
+                    paths.write_json_atomic(claude_json_path, data)
+                    removed.append(".claude.json:oauthAccount")
+                except OSError:
+                    failed.append(".claude.json")
+
+    def _unpin(cfg):
+        for acct in cfg.get("accounts", []):
+            if acct.get("name") == account["name"]:
+                acct.pop("pinned_usage_org", None)
+
+    try:
+        registry.mutate(_unpin)
+    except registry.RegistryError:
+        pass
+
+    email_str = f" ({account['expected_email']})" if account.get("expected_email") else ""
+    if failed:
+        return False, (
+            f"could not delete {', '.join(failed)} for slot "
+            f"'{account['name']}'{email_str}")
+    return True, f"cleared token for slot '{account['name']}'{email_str}"
+

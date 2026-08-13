@@ -42,6 +42,34 @@ IDENTITY_TIMEOUT = int(os.environ.get("HEADROOM_IDENTITY_TIMEOUT", "15"))
 CODEX_STALE_AFTER = int(os.environ.get("HEADROOM_CODEX_STALE_AFTER", "1800"))
 SCHEMA_VERSION = 1
 
+# Claude Code's public PKCE client. Used only to refresh an already-granted
+# token; it cannot mint a new login.
+CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+CLAUDE_TOKEN_URLS = (
+    "https://platform.claude.com/v1/oauth/token",
+    "https://console.anthropic.com/v1/oauth/token",
+)
+ACCESS_REFRESH_SKEW = 300  # refresh when access dies in < 5 min
+# Refresh tokens can die *before* the access token (seen ~3h vs ~8h).
+# Collect cadence is 5–15 min, so this window must be wider than that or
+# we miss the last chance to rotate. After a successful refresh we write a
+# new refreshTokenExpiresAt so this does not fire every collect.
+REFRESH_PROACTIVE_SKEW = 3600
+DEFAULT_ACCESS_TTL = 28800
+DEFAULT_REFRESH_TTL = 10800  # 3h guess when the server rotates but omits expiry
+CLAUDE_UA = "claude-cli/2.1.201 (external, cli)"
+
+# Operator should re-login these slots (`headroom connect <name>`).
+RECONNECT_CODES = frozenset({
+    "claude_local_binding_missing",
+    "claude_credentials_missing",
+    "claude_refresh_expired",
+    "slot_bound_to_unexpected_email",
+    "codex_auth_missing",
+    "codex_identity_email_missing",
+    "codex_reauth_required",
+})
+
 PUBLIC_FIELDS = {
     "name", "email", "provider", "plan", "ok", "note", "error_code", "retry_at",
     "captured_at", "source", "stale", "windows", "identity_verified",
@@ -220,13 +248,22 @@ def claude_bin():
 
 
 def claude_identity(home, runner=subprocess.run):
-    """Provider-verified identity via `claude auth status`; local fallback."""
+    """Local metadata first. The CLI is a last resort and is never spawned
+    when the slot has no credentials (a dead home used to cost 15s)."""
+    try:
+        return claude_local_identity(home)
+    except IdentityBindingError:
+        pass
+    creds = os.path.join(home, ".credentials.json")
+    if not os.path.isfile(creds):
+        raise IdentityBindingError("claude_local_binding_missing")
     binary = claude_bin()
     if binary:
         env = scrubbed_env()
         env["CLAUDE_CONFIG_DIR"] = home
         try:
-            cmd_args, use_shell = paths.prepare_subprocess([binary, "auth", "status", "--json"])
+            cmd_args, use_shell = paths.prepare_subprocess(
+                [binary, "auth", "status", "--json"])
             process = runner(
                 cmd_args, env=env,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -238,7 +275,8 @@ def claude_identity(home, runner=subprocess.run):
                     return {
                         "verified": True,
                         "email": status.get("email"),
-                        "account_fingerprint": fingerprint(f"{status.get('orgId')}:{status.get('email')}"),
+                        "account_fingerprint": fingerprint(
+                            f"{status.get('orgId')}:{status.get('email')}"),
                         "method": "claude_auth_status",
                         "plan_type": status.get("subscriptionType"),
                     }
@@ -518,33 +556,153 @@ def limit_entry(limit, minutes):
     }
 
 
-def refresh_claude_token(home):
-    binary = claude_bin()
-    if not binary:
-        return False
-    env = scrubbed_env()
-    env["CLAUDE_CONFIG_DIR"] = home
-    try:
-        cmd_args, use_shell = paths.prepare_subprocess(
-            [binary, "--print", "verifying token", "--tools", ""])
-        subprocess.run(
-            cmd_args,
-            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=15, shell=use_shell
-        )
+def _epoch_ms(value):
+    """Normalize expiresAt-like fields to epoch milliseconds."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    if value < 1e12:  # stored in seconds
+        return int(value * 1000)
+    return int(value)
+
+
+def refresh_needed(oauth, now=None):
+    """True when the access token is near expiry, OR the refresh token is
+    near expiry / already past (it can die before access; rotate while we
+    still can). Does NOT fire merely because refreshTokenExpiresAt is
+    earlier than expiresAt — that used to refresh on every collect."""
+    now = time.time() if now is None else now
+    now_ms = int(now * 1000)
+    expires = _epoch_ms(oauth.get("expiresAt"))
+    refresh_exp = _epoch_ms(oauth.get("refreshTokenExpiresAt"))
+    if expires is None or expires < now_ms + ACCESS_REFRESH_SKEW * 1000:
         return True
-    except Exception:
+    if refresh_exp is not None \
+            and refresh_exp < now_ms + REFRESH_PROACTIVE_SKEW * 1000:
+        return True
+    return False
+
+
+def _refresh_expires_ms(data, now_ms):
+    """Best-effort refresh-token expiry from a token-endpoint payload."""
+    for key in ("refresh_expires_in", "refresh_token_expires_in"):
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and value > 0:
+            return now_ms + int(value) * 1000
+    for key in ("refresh_expires_at", "refresh_token_expires_at"):
+        parsed = _epoch_ms(data.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def refresh_claude_token(home, opener=None, token_urls=None, now=None):
+    """Refresh Claude OAuth via the token endpoint. Never spawns the CLI
+    and never spends inference tokens.
+
+    Returns True when credentials were rewritten. Raises
+    IdentityBindingError('claude_refresh_expired') when the refresh token
+    is missing or the server rejects it (invalid_grant / 401). Returns
+    False on a transient network/5xx so the caller can keep a still-valid
+    access token."""
+    creds_path = os.path.join(home, ".credentials.json")
+    credentials = paths.load_json(creds_path) or {}
+    oauth = credentials.get("claudeAiOauth") or {}
+    refresh = oauth.get("refreshToken")
+    if not refresh:
+        raise IdentityBindingError("claude_refresh_expired")
+    # Do not refuse the POST just because refreshTokenExpiresAt is in the
+    # past — that timestamp is often pessimistic or unit-ambiguous. Let the
+    # server accept or return invalid_grant.
+
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+        "client_id": CLAUDE_OAUTH_CLIENT_ID,
+    }
+    scopes = oauth.get("scopes") or []
+    if isinstance(scopes, list) and scopes:
+        payload["scope"] = " ".join(str(scope) for scope in scopes)
+    body = json.dumps(payload).encode("utf-8")
+    opener = open_authenticated if opener is None else opener
+    urls = CLAUDE_TOKEN_URLS if token_urls is None else tuple(token_urls)
+    data = None
+    for index, url in enumerate(urls):
+        request = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={
+                "content-type": "application/json",
+                "user-agent": CLAUDE_UA,
+            },
+        )
+        try:
+            response = opener(request, timeout=15)
+        except urllib.error.HTTPError as error:
+            with error:
+                moved = error.code in (404, 405) and index + 1 < len(urls)
+                if moved:
+                    continue
+                if error.code in (400, 401):
+                    raise IdentityBindingError("claude_refresh_expired") from error
+                return False
+        except (OSError, urllib.error.URLError):
+            if index + 1 < len(urls):
+                continue
+            return False
+        with response:
+            try:
+                data = json.load(response)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                return False
+        break
+    if not isinstance(data, dict) or not data.get("access_token"):
         return False
+
+    # Re-read so a concurrent Claude Code write is not clobbered more than
+    # we have to; then overwrite only the token fields.
+    credentials = paths.load_json(creds_path) or credentials
+    oauth = dict(credentials.get("claudeAiOauth") or {})
+    now_ms = int((time.time() if now is None else now) * 1000)
+    oauth["accessToken"] = data["access_token"]
+    if data.get("refresh_token"):
+        oauth["refreshToken"] = data["refresh_token"]
+    expires_in = data.get("expires_in")
+    if not isinstance(expires_in, (int, float)) or isinstance(expires_in, bool) \
+            or expires_in <= 0:
+        expires_in = DEFAULT_ACCESS_TTL
+    oauth["expiresAt"] = now_ms + int(expires_in) * 1000
+    refresh_exp = _refresh_expires_ms(data, now_ms)
+    if refresh_exp is not None:
+        oauth["refreshTokenExpiresAt"] = refresh_exp
+    elif data.get("refresh_token"):
+        # Rotated, but the server omitted expiry. Pin a conservative TTL so
+        # refresh_needed does not immediately fire again, and so we still
+        # proactively rotate before a typical short-lived refresh dies.
+        oauth["refreshTokenExpiresAt"] = now_ms + DEFAULT_REFRESH_TTL * 1000
+    elif _epoch_ms(oauth.get("refreshTokenExpiresAt")) is not None \
+            and _epoch_ms(oauth.get("refreshTokenExpiresAt")) <= now_ms:
+        # Same refresh token, stale expiry stamp — drop it so we do not
+        # refresh-loop every collect.
+        oauth.pop("refreshTokenExpiresAt", None)
+    if data.get("scope"):
+        oauth["scopes"] = str(data["scope"]).split()
+    credentials["claudeAiOauth"] = oauth
+    try:
+        paths.write_json_atomic(creds_path, credentials, mode=0o600)
+    except OSError as error:
+        # Server already rotated the refresh token; the file must not keep
+        # the old one or the next collect cannot recover.
+        raise IdentityBindingError("claude_refresh_expired") from error
+    return True
 
 
 def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
     oauth = credentials.get("claudeAiOauth") or {}
-    expires_at = oauth.get("expiresAt")
-    if expires_at and (expires_at / 1000.0) < (time.time() + 60):
-        refresh_claude_token(home)
-        credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
-        oauth = credentials.get("claudeAiOauth") or {}
+    if refresh_needed(oauth):
+        if refresh_claude_token(home, opener=opener):
+            credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
+            oauth = credentials.get("claudeAiOauth") or {}
 
     if not oauth.get("accessToken"):
         raise IdentityBindingError("claude_credentials_missing")
@@ -561,7 +719,7 @@ def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     except urllib.error.HTTPError as error:
         with error:
             if error.code == 401:
-                if refresh_claude_token(home):
+                if refresh_claude_token(home, opener=opener):
                     credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
                     oauth = credentials.get("claudeAiOauth") or {}
                     if oauth.get("accessToken"):
@@ -903,18 +1061,11 @@ def collect(accounts, backoff=None, persist_backoff=None):
         except IdentityBindingError as error:
             result["ok"] = False
             result["error_code"] = error.code
-            if error.code == "claude_credentials_missing":
-                # verified identity but no file-based token — typically a
-                # Keychain-backed macOS default login headroom can't read
-                result["note"] = ("Claude login found but its token isn't "
-                                  "file-based (macOS Keychain?). headroom needs "
-                                  "a file-based login: `headroom connect "
-                                  f"{account['name']}-fresh` to log in to an "
-                                  "isolated home instead of adopting this one.")
-            else:
-                result["note"] = ("identity could not be bound to this slot; "
-                                  "account held — run `headroom connect` "
-                                  "to re-login")
+            # held slots still show who they *should* be, so the dashboard
+            # and doctor can name the reconnect target
+            if not result.get("email") and account.get("expected_email"):
+                result["email"] = account["expected_email"]
+            result["note"] = binding_note(error.code, account, result)
         except Exception as error:  # noqa: BLE001 — every account must report
             result["ok"] = False
             # `error` is PRIVATE-only (may contain local paths / usernames).
@@ -929,6 +1080,30 @@ def collect(accounts, backoff=None, persist_backoff=None):
         completed, timezone.utc
     ).isoformat().replace("+00:00", "Z")
     return snapshot
+
+
+def binding_note(code, account, result=None):
+    """Operator-facing reason + next command for a held identity binding."""
+    result = result or {}
+    name = account.get("name") or "account"
+    expected = account.get("expected_email")
+    expected_bit = f" (expected {expected})" if expected else ""
+    reconnect = f"run `headroom connect {name}`"
+    if code == "claude_local_binding_missing":
+        return f"no login in slot '{name}'{expected_bit} — {reconnect}"
+    if code == "claude_credentials_missing":
+        return ("Claude login found but its token isn't file-based "
+                f"(macOS Keychain?). Isolated re-login: `{reconnect}`")
+    if code == "claude_refresh_expired":
+        return f"refresh token expired for slot '{name}'{expected_bit} — {reconnect}"
+    if code == "slot_bound_to_unexpected_email":
+        got = ((result.get("identity") or {}).get("email")
+               or result.get("email") or "unknown")
+        expect = expected or "a pinned email"
+        return (f"logged in as {got}; slot '{name}' expects {expect} "
+                f"— {reconnect} or `headroom remove {name}`")
+    return (f"identity could not be bound to slot '{name}' ({code}); "
+            f"account held — {reconnect}")
 
 
 def redact_email(address):

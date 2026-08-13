@@ -63,6 +63,14 @@ snapshot and on the dashboard). This keeps offline/air-gapped setups usable.
 If you want provider-verified-only routing, treat `verified_local` as held —
 open an issue if you want this as a config flag.
 
+## Refresh tokens can die before the access token
+
+Some Claude slots store a `refreshTokenExpiresAt` earlier than `expiresAt`
+(hours, not days). headroom now refreshes over HTTP when either timestamp
+is near, but if both have already lapsed the slot is held with
+`claude_refresh_expired` — only `headroom connect <name>` can mint a new
+login. Leaving the dashboard/collector off overnight can miss the window.
+
 ## File-based credentials required (macOS Keychain caveat)
 
 headroom reads usage tokens from files (`.credentials.json`, `auth.json`).

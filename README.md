@@ -88,7 +88,10 @@ headroom rotate            # limit hit? cool this login, switch to the next
 | command | what it does |
 |---|---|
 | `headroom setup` | first-run wizard: accounts + dashboard style quiz |
-| `headroom connect` | add another account (guided login, clobber-proof) |
+| `headroom connect` | add another account, or re-login an existing slot |
+| `headroom reconnect <name>` | re-login an existing slot (same as `connect <name>`) |
+| `headroom clear-token <name>` | delete stored credentials; the slot stays |
+| `headroom remove <name>` | drop a slot from the registry (home directory kept) |
 | `headroom collect` | refresh usage for every account (no tokens spent) |
 | `headroom status [model]` | table: every account, its windows, and exactly why any is skipped |
 | `headroom pick <model>` | print the best account name (exit 2 if none) — script-friendly |
@@ -109,7 +112,9 @@ headroom rotate            # limit hit? cool this login, switch to the next
   use to draw their usage UI. headroom calls it read-only and verifies the
   organization the response belongs to matches the login bound to that slot —
   a swapped or clobbered login can never report another account's headroom.
-  Claude usage is always live.
+  Near-expiry access tokens are refreshed over the same OAuth token endpoint
+  Claude Code uses — never via a `claude --print` turn, so a collect still
+  spends no inference quota. Claude usage is always live.
 - **Codex — real-time.** headroom reads Codex usage live from the Codex
   **app-server** (`codex app-server` → `account/rateLimits/read` +
   `account/read`), bound to each account's own config home. That's a live,

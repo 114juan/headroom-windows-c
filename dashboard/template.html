@@ -193,6 +193,15 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .acct-email { display: block; font: 600 12px/1.35 var(--mono); word-break: break-all; }
 .acct-meta { margin-top: 5px; color: var(--ink-3); font: 500 9.5px/1.5 var(--mono); }
 .acct-meta span { display: inline-block; margin-right: 10px; }
+.acct-actions { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.acct-action { appearance: none; padding: 2px 7px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: transparent; color: var(--ink-2);
+  font: 500 9px var(--mono); cursor: pointer; opacity: .8;
+  transition: opacity .2s, border-color .2s; }
+.acct-action:hover { opacity: 1; border-color: var(--ink-2); }
+.acct-action.is-danger { color: var(--red); }
+.acct-action.is-danger:hover { border-color: var(--red); }
+
 
 .win { display: flex; flex-direction: column; align-items: center;
        text-align: center; gap: 7px; justify-content: flex-start; }
@@ -427,19 +436,49 @@ function accountState(account){
   if(code==="usage_source_rate_limited")
     return{cls:"held",label:"Rate-limited",note:"provider throttled the usage feed · "
       +(Number.isFinite(account.retry_at)?untilReset(account.retry_at).replace("resets","retries"):"retries automatically")};
+  if(code==="claude_local_binding_missing"||code==="claude_credentials_missing"
+      ||code==="claude_refresh_expired"||code==="codex_auth_missing"
+      ||code==="codex_reauth_required")
+    return{cls:"held",label:"Needs login",note:account.note||("run `headroom connect "+account.name+"`")};
+  if(code==="slot_bound_to_unexpected_email")
+    return{cls:"held",label:"Wrong identity",note:account.note||"reconnect or remove"};
   return{cls:"held",label:"Held",note:account.note||account.error_code||"no verified reading"};
 }
-function accountMarkup(account,columns){
+function needsLogin(account){
+  return ["claude_local_binding_missing","claude_credentials_missing",
+          "claude_refresh_expired","codex_auth_missing",
+          "codex_identity_email_missing","codex_reauth_required",
+          "slot_bound_to_unexpected_email"].indexOf(account.error_code||"")>=0;
+}
+function accountActions(account,totalAccounts){
+  if(CONFIG&&CONFIG.demo)return"";
+  const bits=["<div class=\"acct-actions\">"];
+  if(needsLogin(account)){
+    bits.push('<button type="button" class="acct-action" data-act="reconnect" data-name="'
+      +esc(account.name)+'">Copy reconnect</button>');
+  }else{
+    bits.push('<button type="button" class="acct-action is-danger" data-act="logout" data-name="'
+      +esc(account.name)+'">Log out</button>');
+  }
+  if(totalAccounts>1){
+    bits.push('<button type="button" class="acct-action is-danger" data-act="remove" data-name="'
+      +esc(account.name)+'">Remove</button>');
+  }
+  bits.push("</div>");
+  return bits.join("");
+}
+function accountMarkup(account,columns,totalAccounts){
   const s=accountState(account);
   const dot=s.cls==="live"?'<span class="live-dot" aria-hidden="true"></span>':"";
   return '<article class="account is-'+s.cls+'" style="--win-cols:'+columns.length+'">'+
     '<div class="acct-identity"><span class="acct-email">'+esc(account.email||account.name)+"</span>"+
-    '<div class="acct-meta"><span>'+esc(account.name)+"</span><span>"+esc(account.plan||account.provider)+"</span></div></div>"+
+    '<div class="acct-meta"><span>'+esc(account.name)+"</span><span>"+esc(account.plan||account.provider)+"</span></div>"+
+    accountActions(account,totalAccounts)+"</div>"+
     columns.map(k=>windowMarkup(account,k)).join("")+
     '<div class="state"><span class="state-badge state-'+s.cls+'">'+dot+esc(s.label)+"</span>"+
     '<p class="state-note">'+esc(s.note)+"</p></div></article>";
 }
-function providerMarkup(provider,accounts){
+function providerMarkup(provider,accounts,totalAccounts){
   if(!accounts.length)return"";
   const columns=windowColumns(accounts);
   const title=provider==="claude"?"Claude":"Codex";
@@ -448,7 +487,7 @@ function providerMarkup(provider,accounts){
     '<h2 class="provider-name">'+title+'</h2><span class="provider-count">'+
     accounts.length+(accounts.length===1?" subscription":" subscriptions")+
     ' <span class="provider-mode">· '+sub+'</span></span></header>'+
-    accounts.map(a=>accountMarkup(a,columns)).join("")+"</section>";
+    accounts.map(a=>accountMarkup(a,columns,totalAccounts)).join("")+"</section>";
 }
 function validate(data){
   if(!data||!Number.isFinite(data.generated)||!Array.isArray(data.accounts))
@@ -489,7 +528,7 @@ function render(data){
   set("snapshot-age","snapshot "+age(data.generated));
   set("source-line",current.length+" of "+accounts.length+" verified");
   document.getElementById("providers").innerHTML=
-    providerMarkup("claude",claude)+providerMarkup("codex",codex);
+    providerMarkup("claude",claude,accounts.length)+providerMarkup("codex",codex,accounts.length);
   const warnings=(data.integrity_warnings||[]).slice();
   if(snapStale)warnings.unshift("snapshot is over 30 minutes old — readings shown as held until a fresh collect");
   const throttled=accounts.filter(a=>a.error_code==="usage_source_rate_limited");
@@ -552,6 +591,47 @@ async function load(manual){
     if(manual&&requestId===requestNumber){button.disabled=false;button.textContent="Refresh";}
   }
 }
+
+async function mutateAccount(url,accountName){
+  try{
+    const res=await fetch(url,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({account:accountName})});
+    const data=await res.json();
+    if(data.ok) load(true);
+    else alert("Error: "+(data.error||"unknown error"));
+  }catch(err){ alert("Request failed: "+err.message); }
+}
+(function bindAccountActions(){
+  const root=document.getElementById("providers");
+  if(!root||root.dataset.bound) return;
+  root.dataset.bound="1";
+  root.addEventListener("click",async ev=>{
+    const btn=ev.target.closest("[data-act]");
+    if(!btn) return;
+    const name=btn.getAttribute("data-name")||"";
+    const act=btn.getAttribute("data-act");
+    if(act==="reconnect"){
+      const cmd="headroom connect "+name;
+      try{
+        await navigator.clipboard.writeText(cmd);
+        btn.textContent="Copied";
+        setTimeout(()=>{btn.textContent="Copy reconnect";},1200);
+      }catch(e){ prompt("Copy this command:",cmd); }
+      return;
+    }
+    if(act==="logout"){
+      if(!confirm("Log out '"+name+"'? Credentials will be deleted; the slot stays.")) return;
+      await mutateAccount("/api/clear-token",name);
+      return;
+    }
+    if(act==="remove"){
+      if(!confirm("Remove slot '"+name+"' from the registry? The home directory is kept.")) return;
+      await mutateAccount("/api/remove",name);
+    }
+  });
+})();
+
 
 /* --------------------------------------------------------------- theme */
 const picker=document.getElementById("theme");

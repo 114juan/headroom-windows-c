@@ -30,8 +30,10 @@ Every account is a *slot*: a name, a provider, and an isolated CLI config
 home. The provider's own login flow binds an identity (email + org/account
 id) *into* that home. headroom then:
 
-1. reads the bound identity back (via `claude auth status` / the OpenAI
-   userinfo endpoint, falling back to local metadata when offline),
+1. reads the bound identity back from local slot metadata first
+   (`.claude.json` / the Codex id token). The provider CLI
+   (`claude auth status`) is a last resort and is never spawned when the
+   slot has no credentials. Codex can re-verify live via userinfo.
 2. fingerprints the provider account id (SHA-256, truncated — the raw id
    never leaves the private snapshot),
 3. verifies at usage-read time that the usage response belongs to the same
@@ -46,6 +48,20 @@ Consequences:
   the same exhausted quota;
 - `expected_email` in config (set automatically by `headroom connect`) pins a
   slot to a specific identity permanently.
+
+## Claude token refresh
+
+Access tokens die in about an hour (older slots closer to 8h). headroom
+refreshes them with a read-only POST to Anthropic's OAuth token endpoint
+(`platform.claude.com/v1/oauth/token`, with the legacy console URL as a
+404/405 fallback). It never runs `claude --print` and never spends
+inference quota.
+
+Refresh happens when the access token is within 5 minutes of expiry, when
+the refresh token itself is within an hour of dying (it can expire *before*
+access), or when the usage API returns 401. A dead or rejected refresh
+token holds the slot with `claude_refresh_expired` and tells you to run
+`headroom connect <name>`.
 
 ## The windows
 

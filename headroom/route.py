@@ -317,7 +317,9 @@ def cmd_status(fam):
         if scoped is not None:
             head += " %s=%s" % (fam, collector.display_percent(scoped))
         marker = "AVAIL" if reason is None else "skip "
-        note = "" if reason is None else f"({reason})"
+        row = rows.get(account["name"]) or {}
+        detail = (row.get("note") if reason and row.get("note") else reason) or ""
+        note = f"({detail})" if detail else ""
         print(f"  {marker}  {account['name']:<18} {head:<28} {note}")
         if reason is None and chosen is None:
             chosen = account["name"]

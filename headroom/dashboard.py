@@ -56,13 +56,13 @@ def build_demo(out_dir=None):
                    "accounts": [{"name": a["name"], "provider": a["provider"],
                                  "home": "/tmp/demo/" + a["name"]}
                                 for a in data["accounts"]]}
-    build(demo_config, out_dir)
+    build(demo_config, out_dir, demo=True)
     with open(os.path.join(out_dir, "usage.json"), "w", encoding="utf-8") as handle:
         json.dump(data, handle)
     return out_dir
 
 
-def build(config=None, out_dir=None, snapshot_file=None):
+def build(config=None, out_dir=None, snapshot_file=None, demo=False):
     config = registry.load() if config is None else config
     settings = registry.dashboard_settings(config)
     out_dir = paths.public_dir() if out_dir is None else out_dir
@@ -73,6 +73,7 @@ def build(config=None, out_dir=None, snapshot_file=None):
         "theme": settings["theme"],
         "title": settings["title"],
         "redact": bool(settings.get("redact_emails", True)),
+        "demo": bool(demo),
         "accounts": [{"name": account["name"], "provider": account["provider"]}
                      for account in registry.accounts(config)],
     }
@@ -177,6 +178,84 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
         super().do_GET()
+
+    def _json(self, status, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _account_param(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+        if length > 4096:
+            return None
+        raw_body = self.rfile.read(length) if length > 0 else b""
+        if raw_body:
+            try:
+                payload = json.loads(raw_body.decode("utf-8"))
+                name = payload.get("account") if isinstance(payload, dict) else None
+                if name:
+                    return name
+            except (ValueError, UnicodeDecodeError):
+                pass
+        from urllib.parse import parse_qs, urlparse
+        params = parse_qs(urlparse(self.path).query)
+        return params.get("account", [None])[0]
+
+    def do_POST(self):
+        if not self._host_ok():
+            body = b"forbidden: non-loopback Host"
+            self.send_response(403)
+            self.send_header("content-type", "text/plain")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        clean_path = self.path.split("?")[0]
+        if clean_path in ("/api/clear-token", "/api/logout", "/api/remove"):
+            status, payload = apply_mutation(
+                clean_path, self._account_param(), demo=self.demo)
+            self._json(status, payload)
+            return
+
+        body = b"not found"
+        self.send_response(404)
+        self.send_header("content-type", "text/plain")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+
+def apply_mutation(path, account_name, demo=False):
+    """Logout or remove a slot. Used by the local dashboard POSTs.
+    Returns (http_status, json_payload)."""
+    if demo:
+        return 400, {"ok": False, "error": "disabled in demo mode"}
+    if not account_name:
+        return 400, {"ok": False, "error": "missing account parameter"}
+    from . import connect
+    try:
+        config = registry.load()
+    except registry.RegistryError as error:
+        return 400, {"ok": False, "error": str(error)}
+    if path == "/api/remove":
+        ok, msg = connect.remove_account(config, account_name)
+    elif path in ("/api/clear-token", "/api/logout"):
+        ok, msg = connect.clear_token(config, account_name)
+    else:
+        return 404, {"ok": False, "error": "not found"}
+    if not ok:
+        return 400, {"ok": False, "error": msg}
+    collector.run_collect(quiet=True)
+    snapshot = paths.load_json(paths.public_snapshot_path())
+    return 200, {"ok": True, "message": msg, "snapshot": snapshot}
 
 
 def serve(open_browser=True, port=None, demo=False):
