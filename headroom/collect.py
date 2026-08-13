@@ -1178,6 +1178,16 @@ def run_collect(quiet=False):
             public_snapshot(snapshot, settings.get("redact_emails", True)),
             mode=0o644,
         )
+        try:
+            from . import history as usage_history
+            if usage_history.enabled():
+                live = {usage_history.slot_id(account)
+                        for account in snapshot.get("accounts") or []}
+                live.discard(None)
+                usage_history.append_snapshot(snapshot, live_ids=live)
+        except Exception as error:  # noqa: BLE001 — history must never block collect
+            if not quiet:
+                print("WARNING history not recorded:", error)
         if not quiet:
             print_snapshot(snapshot)
         return snapshot

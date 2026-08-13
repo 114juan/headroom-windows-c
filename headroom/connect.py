@@ -357,6 +357,12 @@ def remove_account(config, name_or_email):
         return False, str(error)
     config["accounts"] = [entry for entry in config.get("accounts", [])
                           if entry.get("name") != name]
+    try:
+        from . import history as usage_history
+        usage_history.remove_account(usage_history.slot_id(account),
+                                     legacy_name=name)
+    except Exception:
+        pass
     email_str = f" ({account['expected_email']})" if account.get("expected_email") else ""
     return True, f"removed slot '{name}'{email_str} (home left in place)"
 

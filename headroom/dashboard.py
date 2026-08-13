@@ -15,10 +15,11 @@ import shutil
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 
 from . import collect as collector
-from . import paths, registry
+from . import history, paths, registry
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "dashboard", "template.html")
@@ -146,9 +147,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        route = self.path.split("?")[0]
+        if route == "/history.json":
+            self._serve_history()
+            return
         # in demo mode the sample usage.json is a static file in the served dir;
         # never try to re-collect (there are no real accounts)
-        if self.path.split("?")[0] == "/usage.json" and not self.demo:
+        if route == "/usage.json" and not self.demo:
             snapshot = paths.load_json(paths.public_snapshot_path())
             generated = (snapshot or {}).get("generated", 0)
             if not snapshot or time.time() - generated > SERVE_MAX_AGE:
@@ -178,6 +183,59 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
         super().do_GET()
+
+    def _send_body(self, status, content_type, body):
+        self.send_response(status)
+        self.send_header("content-type", content_type)
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_history(self):
+        """Stats tab feed: window percentages only, never emails or tokens."""
+        try:
+            if not history.enabled():
+                self._send_body(
+                    503, "application/json",
+                    b'{"error":"history_disabled"}')
+                return
+            query = urllib.parse.parse_qs(
+                urllib.parse.urlsplit(self.path).query)
+            try:
+                days = int((query.get("days") or [7])[0])
+            except (TypeError, ValueError):
+                days = 7
+            days = min(history.retention_days(), max(1, days))
+            if self.demo:
+                snapshot = paths.load_json(
+                    os.path.join(self.directory, "usage.json"))
+                live_ids = {history.slot_id(account)
+                            for account in (snapshot or {}).get("accounts", [])}
+                live_ids.discard(None)
+                rows = history.demo_rows(snapshot, days) \
+                    if isinstance(snapshot, dict) else []
+            else:
+                config = registry.load()
+                live_ids = {history.slot_id(account)
+                            for account in registry.accounts(config)}
+                live_ids.discard(None)
+                rows = history.load_series(days, live_ids)
+            if not rows:
+                self._send_body(
+                    503, "application/json",
+                    b'{"error":"no history yet"}')
+                return
+            value = history.response(
+                days, live_ids, rows=rows, generated=int(time.time()))
+            body = json.dumps(value, allow_nan=False,
+                              separators=(",", ":")).encode("utf-8")
+        except Exception:
+            self._send_body(
+                503, "application/json",
+                b'{"error":"invalid history"}')
+            return
+        self._send_body(200, "application/json", body)
 
     def _json(self, status, payload):
         body = json.dumps(payload).encode()

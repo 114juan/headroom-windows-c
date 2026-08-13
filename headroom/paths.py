@@ -13,6 +13,24 @@ import os
 import tempfile
 
 
+def env_int(name, default):
+    """Tolerant module-level env int. A malformed value degrades to default
+    instead of crashing import-time constants."""
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def fchmod_private(descriptor, mode):
+    """Owner-only mode on an open fd; a no-op where fchmod is unavailable."""
+    if hasattr(os, "fchmod"):
+        try:
+            os.fchmod(descriptor, mode)
+        except OSError:
+            pass
+
+
 def base_dir():
     raw = os.environ.get("HEADROOM_DIR") or "~/.headroom"
     expanded = os.path.expanduser(raw)
@@ -45,6 +63,14 @@ def state_dir():
 
 def public_dir():
     return os.path.join(state_dir(), "public")
+
+
+def history_dir():
+    return os.path.join(state_dir(), "history")
+
+
+def history_path():
+    return os.path.join(history_dir(), "usage-history.jsonl")
 
 
 def private_snapshot_path():
