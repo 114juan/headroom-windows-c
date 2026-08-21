@@ -26,7 +26,17 @@ import re
 
 from . import paths
 
-PROVIDERS = ("claude", "codex")
+PROVIDERS = ("claude", "codex", "grok")
+HOME_ENV = {
+    "claude": "CLAUDE_CONFIG_DIR",
+    "codex": "CODEX_HOME",
+    "grok": "GROK_HOME",
+}
+DEFAULT_HOMES = {
+    "claude": "~/.claude",
+    "codex": "~/.codex",
+    "grok": "~/.grok",
+}
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 DEFAULT_DASHBOARD = {
     "theme": "midnight",
@@ -45,6 +55,7 @@ FAMILY_PROVIDER = {
     "claude": "claude",
     "codex": "codex",
     "gpt": "codex",
+    "grok": "grok",
 }
 
 
@@ -57,12 +68,15 @@ def family(model):
     for name in ("fable", "opus", "sonnet", "haiku", "codex", "gpt"):
         if name in model:
             return "codex" if name == "gpt" else name
+    if "grok" in model:
+        return "grok"
     if not model or "claude" in model:
         return "claude"
     # An unknown model must not silently route as generic Claude — a typo'd
     # scoped model would bypass its own weekly cap.
     raise RegistryError(
-        f"unknown model family: {model!r} (use opus/sonnet/haiku/claude/codex)")
+        f"unknown model family: {model!r} "
+        f"(use opus/sonnet/haiku/claude/codex/grok)")
 
 
 def family_provider(fam):

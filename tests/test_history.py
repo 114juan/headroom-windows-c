@@ -116,6 +116,73 @@ class HistoryPersistenceTests(unittest.TestCase):
         self.assertEqual(payload["leaderboard"][0]["rank"], 1)
         self.assertTrue(payload["series"][0]["windows"]["5h"])
 
+    def test_analytics_tracks_burn_peak_hour_and_resets(self):
+        identity = slot_id("alpha")
+        # Hours 10, 11, 14, 15 in the mocked local clock.
+        stamps = [NOW - 5 * 3600, NOW - 4 * 3600, NOW - 3600, NOW]
+
+        def fake_localtime(ts):
+            hour = {stamps[0]: 10, stamps[1]: 11, stamps[2]: 14,
+                    stamps[3]: 15}[int(ts)]
+            return time.struct_time((2026, 1, 1, hour, 0, 0, 3, 1, -1))
+
+        rows = []
+        used = [10.0, 12.0, 40.0, 18.0]  # +2, +28, reset 40→18
+        for ts, value in zip(stamps, used):
+            rows.append({
+                "ts": ts,
+                "accounts": [{
+                    "id": identity, "name": "alpha", "provider": "claude",
+                    "plan": "Max", "ok": True, "stale": False,
+                    "windows": {
+                        "5h": {"used_percent": value, "resets_at": ts + 3600},
+                        "7d": {"used_percent": value + 5,
+                               "resets_at": ts + 86400},
+                    },
+                }],
+            })
+        with mock.patch.object(history.time, "localtime",
+                               side_effect=fake_localtime), \
+                mock.patch.object(history.time, "time", return_value=NOW):
+            payload = history.response(1, {identity}, rows=rows, generated=NOW)
+        session = payload["summary"][0]["windows"]["5h"]
+        self.assertEqual(session["spent_in_range"], 30.0)
+        self.assertEqual(session["reset_count"], 1)
+        self.assertEqual(session["peak_hour"], 14)
+        self.assertGreater(session["burn_per_hour"], 0)
+        self.assertEqual(payload["analytics"]["windows"]["5h"]["peak_hour"], 14)
+        self.assertEqual(payload["analytics"]["windows"]["5h"]["spent_in_range"],
+                         30.0)
+        encoded = json.dumps(payload, allow_nan=False)
+        self.assertIn("burn_per_hour", encoded)
+        self.assertNotIn("NaN", encoded)
+
+    def test_hours_to_empty_uses_recent_pace(self):
+        identity = slot_id("alpha")
+        rows = []
+        for offset, used in ((7200, 20.0), (3600, 40.0), (0, 60.0)):
+            ts = NOW - offset
+            rows.append({
+                "ts": ts,
+                "accounts": [{
+                    "id": identity, "name": "alpha", "provider": "claude",
+                    "plan": "Max", "ok": True, "stale": False,
+                    "windows": {
+                        "5h": {"used_percent": used, "resets_at": ts + 3600},
+                    },
+                }],
+            })
+        with mock.patch.object(history.time, "time", return_value=NOW):
+            payload = history.response(1, {identity}, rows=rows, generated=NOW)
+        session = payload["summary"][0]["windows"]["5h"]
+        # 40 points in 2 hours → 20%/h, 40% left → 2 hours to empty.
+        self.assertAlmostEqual(session["recent_burn_per_hour"], 20.0)
+        self.assertAlmostEqual(session["hours_to_empty"], 2.0)
+        fleet = payload["analytics"]["windows"]["5h"]
+        self.assertEqual(fleet["soonest_empty"]["name"], "alpha")
+        self.assertEqual(fleet["fastest"]["name"], "alpha")
+        self.assertEqual(fleet["draining_accounts"], 1)
+
     def test_demo_rows_are_percentage_only(self):
         rows = history.demo_rows(snapshot(40, name="personal"), days=7, now=NOW)
         self.assertGreater(len(rows), 10)
@@ -158,8 +225,17 @@ class DemoHistoryFeed(unittest.TestCase):
         self.assertEqual(payload["schema_version"], 1)
         self.assertTrue(payload["series"])
         self.assertTrue(payload["summary"])
+        self.assertIn("analytics", payload)
+        self.assertTrue(payload["analytics"]["windows"])
         names = {item["name"] for item in payload["series"]}
         self.assertIn("personal", names)
         for account in payload["series"]:
             self.assertNotIn("email", account)
             self.assertNotIn("@", account["name"])
+        with open(os.path.join(out, "index.html"), encoding="utf-8") as handle:
+            html = handle.read()
+        self.assertIn('id="boot"', html)
+        self.assertIn('id="hour-chart"', html)
+        self.assertIn('id="spend-kpis"', html)
+        self.assertIn('id="usage-pulse"', html)
+        self.assertNotIn("/*__HEADROOM_CONFIG__*/ null", html)

@@ -63,6 +63,19 @@
       "source": "codex_session_telemetry",
       "note": "no Codex telemetry yet — run one Codex turn on this account",
       "windows": {}
+    },
+    {
+      "name": "grok-main", "email": "alex@fastmail.com", "provider": "grok",
+      "plan": "SuperGrok", "ok": true, "stale": false, "routable": true,
+      "trust_state": "verified", "identity_verified": true,
+      "identity_method": "grok_billing_api", "captured_at": 0,
+      "source": "grok_billing_api",
+      "windows": {
+        "5h": {"used_percent": null, "resets_at": null, "window_minutes": 300,
+                "freshness": "not_applicable"},
+        "7d": {"used_percent": 41.0, "resets_at": 0, "window_minutes": 10080,
+                "freshness": "fresh"}
+      }
     }
   ]
 }

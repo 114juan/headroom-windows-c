@@ -181,8 +181,12 @@ select.theme-picker, button.refresh {
   appearance: none; padding: 8px 12px; border: 1px solid var(--line-strong);
   border-radius: var(--radius); background: var(--panel); color: var(--ink);
   font: 600 11px var(--mono); cursor: pointer; box-shadow: var(--panel-shadow);
+  transition: border-color .2s ease, background-color .2s ease, opacity .2s ease,
+              transform .2s ease;
 }
+button.refresh:hover { border-color: var(--accent); }
 button.refresh:disabled { opacity: .55; cursor: wait; }
+.side-nav a { transition: color .2s ease, background-color .2s ease, border-color .2s ease; }
 
 .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
            margin-top: 16px; }
@@ -237,6 +241,9 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .win-name { color: var(--ink-2); font: 700 9px/1.3 var(--mono);
             letter-spacing: .09em; text-transform: uppercase; }
 .win-note { margin: 0; color: var(--ink-3); font: 400 9px/1.4 var(--mono); }
+.win-pace { margin: 0; color: var(--ink-2); font: 650 8.5px/1.35 var(--mono); }
+.win-pace.is-hot { color: var(--orange); }
+.win-pace.is-critical { color: var(--red); }
 
 /* radial capacity meter: thin arc on a recessive track, value in the center */
 .ring { position: relative; width: 78px; height: 78px;
@@ -296,13 +303,82 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .credit { margin-top: 26px; color: var(--ink-3); font: 500 9px var(--mono); }
 .credit a { color: var(--ink-2); }
 
+.top-progress { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 40;
+                transform: scaleX(0); transform-origin: 0 50%; background: var(--accent);
+                pointer-events: none; opacity: 0; }
+.boot { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
+        background: var(--bg); color: var(--ink); }
+.boot-inner { display: grid; justify-items: center; gap: 16px; padding: 24px; }
+.boot-mark { display: flex; align-items: center; gap: 10px;
+             font: 800 18px/1 var(--mono); letter-spacing: -.04em; }
+.boot-mark svg { width: 18px; height: 18px; }
+.boot-mark .wm-a { fill: var(--ink-3); }
+.boot-mark .wm-b { fill: var(--ink-2); }
+.boot-mark .wm-c { fill: var(--accent); }
+.boot-track { width: 196px; height: 3px; overflow: hidden; border-radius: 99px;
+              background: var(--cell-bg); }
+.boot-fill { display: block; width: 42%; height: 100%; border-radius: inherit;
+             background: var(--accent); }
+.boot-copy { margin: 0; color: var(--ink-3); font: 500 11px/1.4 var(--mono); }
+.boot.is-done { pointer-events: none; }
+
+.pulse { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+.pulse-item { min-height: 78px; padding: 12px 14px; border: 1px solid var(--line);
+              border-radius: var(--radius); background: var(--panel);
+              box-shadow: var(--panel-shadow); }
+.pulse-item .summary-label { margin-bottom: 8px; }
+.pulse-item .summary-value { font-size: 16px; }
+.pulse-item .summary-note { margin-top: 8px; }
+
 @media (prefers-reduced-motion: no-preference) {
   .live-dot::after { animation: pulse 1.8s ease-out infinite; }
   @keyframes pulse { from { opacity: .6; transform: scale(.6); }
                      to { opacity: 0; transform: scale(1.6); } }
   .ring-arc { transition: stroke-dashoffset .9s cubic-bezier(.16, 1, .3, 1); }
-  .account { transition: transform .25s ease, border-color .25s ease; }
+  .account { transition: transform .25s ease, border-color .25s ease, opacity .35s ease; }
   .account:hover { transform: translateY(-2px); border-color: var(--line-strong); }
+  .summary-item, .pulse-item, .stats-panel, .stats-account {
+    transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease;
+  }
+  .summary-item:hover, .pulse-item:hover { border-color: var(--line-strong); }
+  .tab-view:not([hidden]) { animation: rise .45s cubic-bezier(.16,1,.3,1); }
+  .boot { transition: opacity .55s ease, visibility .55s ease; }
+  .boot.is-done { opacity: 0; visibility: hidden; }
+  .boot-fill { animation: boot-slide 1.15s ease-in-out infinite; }
+  .boot-mark { animation: rise .6s cubic-bezier(.16,1,.3,1); }
+  @keyframes boot-slide { from { transform: translateX(-130%); } to { transform: translateX(280%); } }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); }
+                    to { opacity: 1; transform: translateY(0); } }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+  @keyframes load-bar { 0% { transform: scaleX(.08); opacity: 1; }
+                        50% { transform: scaleX(.72); opacity: 1; }
+                        100% { transform: scaleX(1); opacity: 0; } }
+  body.is-entering .summary-item,
+  body.is-entering .pulse-item,
+  body.is-entering .account,
+  body.is-entering .statusline { animation: rise .55s cubic-bezier(.16,1,.3,1) both; }
+  body.is-entering .summary-item:nth-child(1) { animation-delay: .04s; }
+  body.is-entering .summary-item:nth-child(2) { animation-delay: .08s; }
+  body.is-entering .summary-item:nth-child(3) { animation-delay: .12s; }
+  body.is-entering .summary-item:nth-child(4) { animation-delay: .16s; }
+  body.is-entering .pulse-item:nth-child(1) { animation-delay: .18s; }
+  body.is-entering .pulse-item:nth-child(2) { animation-delay: .22s; }
+  body.is-entering .pulse-item:nth-child(3) { animation-delay: .26s; }
+  body.is-entering .pulse-item:nth-child(4) { animation-delay: .3s; }
+  body.is-entering .account { animation-delay: .28s; }
+  body.is-refreshing .top-progress { animation: load-bar 1.05s ease-in-out infinite; }
+  .chart-line { transition: stroke-dashoffset .9s cubic-bezier(.16,1,.3,1); }
+  .hour-bar { transform-origin: 50% 100%; animation: grow-y .7s cubic-bezier(.16,1,.3,1) both; }
+  .stats-skeleton span {
+    background: linear-gradient(90deg, var(--cell-bg) 0%, var(--line-strong) 45%, var(--cell-bg) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s linear infinite;
+  }
+  .lb-bar i { transition: width .6s cubic-bezier(.16,1,.3,1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot.is-done { display: none; }
 }
 @media (max-width: 860px) {
   .summary { grid-template-columns: 1fr 1fr; }
@@ -314,6 +390,7 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
   .account { grid-template-columns: 1fr; }
   .toolbar { align-items: flex-start; }
   .snapshot { text-align: left; }
+  .pulse { grid-template-columns: 1fr; }
 }
 
 /* ============================================================= stats */
@@ -412,6 +489,24 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
 .stats-inline-empty { padding: 30px 12px; color: var(--ink-3);
                       font: 500 10px/1.5 var(--mono); text-align: center; }
 
+.spend-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.hour-chart { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr));
+              gap: 3px; align-items: end; height: 148px; }
+.hour-col { display: flex; flex-direction: column; justify-content: flex-end;
+            align-items: center; gap: 6px; height: 100%; min-width: 0; }
+.hour-bar { width: 100%; height: var(--h, 4%); min-height: 3px; border-radius: 2px 2px 0 0;
+            background: var(--accent); opacity: .45; }
+.hour-col.is-peak .hour-bar { background: var(--orange); opacity: 1; }
+.hour-col.is-busy .hour-bar { opacity: .85; }
+.hour-label { color: var(--ink-3); font: 500 7.5px/1 var(--mono); }
+.hour-col:not(.is-marked) .hour-label { opacity: 0; }
+.hour-col:nth-child(3n) .hour-label, .hour-col.is-peak .hour-label { opacity: 1; }
+.pace-meta { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 4px; }
+.pace-meta span { color: var(--ink-3); font: 500 9px/1.4 var(--mono); }
+
+@media (max-width: 860px) {
+  .pulse, .spend-kpis { grid-template-columns: 1fr 1fr; }
+}
 @media (max-width: 780px) {
   .app-shell { display: block; }
   .shell { width: min(100% - 24px, 1280px); }
@@ -434,10 +529,19 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
   .stats-controls button { flex: 1 1 auto; align-self: end; }
   .stats-panel { padding: 13px; }
   .stats-metrics { grid-template-columns: 1fr 1fr; }
+  .spend-kpis { grid-template-columns: 1fr; }
 }
 </style>
 </head>
-<body>
+<body class="is-booting">
+<div class="top-progress" aria-hidden="true"></div>
+<div class="boot" id="boot" role="status" aria-live="polite" aria-busy="true">
+  <div class="boot-inner">
+    <div class="boot-mark"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="wm-a" x="1" y="9" width="3.4" height="6" rx="1.1"/><rect class="wm-b" x="6.3" y="5" width="3.4" height="10" rx="1.1"/><rect class="wm-c" x="11.6" y="1" width="3.4" height="14" rx="1.1"/></svg>headroom</div>
+    <div class="boot-track"><i class="boot-fill"></i></div>
+    <p class="boot-copy" id="boot-copy">Reading usage windows…</p>
+  </div>
+</div>
 <div class="app-shell">
 <aside class="side-panel" aria-label="Dashboard sections">
   <div class="wordmark"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="wm-a" x="1" y="9" width="3.4" height="6" rx="1.1"/><rect class="wm-b" x="6.3" y="5" width="3.4" height="10" rx="1.1"/><rect class="wm-c" x="11.6" y="1" width="3.4" height="14" rx="1.1"/></svg>headroom</div>
@@ -494,6 +598,29 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
       <p class="summary-note" id="account-note">–</p></div>
   </section>
 
+  <section class="pulse" id="usage-pulse" aria-label="Spend pace">
+    <div class="pulse-item">
+      <span class="summary-label">Peak hour</span>
+      <strong class="summary-value" id="pulse-peak">–</strong>
+      <p class="summary-note" id="pulse-peak-note">needs usage history</p>
+    </div>
+    <div class="pulse-item">
+      <span class="summary-label">Session burn</span>
+      <strong class="summary-value" id="pulse-burn">–</strong>
+      <p class="summary-note" id="pulse-burn-note">live 5h windows</p>
+    </div>
+    <div class="pulse-item">
+      <span class="summary-label">Next empty</span>
+      <strong class="summary-value" id="pulse-empty">–</strong>
+      <p class="summary-note" id="pulse-empty-note">waiting for pace</p>
+    </div>
+    <div class="pulse-item">
+      <span class="summary-label">Draining now</span>
+      <strong class="summary-value" id="pulse-drain">–</strong>
+      <p class="summary-note" id="pulse-drain-note">accounts with session spend</p>
+    </div>
+  </section>
+
   <div class="statusline" id="status" aria-live="polite">Loading usage readings…</div>
   <div id="providers" aria-live="polite"></div>
 
@@ -512,7 +639,7 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
   <header class="stats-toolbar">
     <div>
       <h1 class="stats-title" id="stats-title">Usage history</h1>
-      <p class="stats-intro" id="stats-intro">Window utilization over time. Percentages show each provider window consumed, never token volume.</p>
+      <p class="stats-intro" id="stats-intro">Window utilization, spend pace, and peak hours over time. Percentages show each provider window consumed, never token volume.</p>
     </div>
     <div class="stats-controls">
       <label class="stats-control"><span>Range</span>
@@ -536,6 +663,26 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
   </div>
 
   <div class="stats-content" id="stats-content" hidden>
+    <section class="stats-panel panel" aria-labelledby="spend-kpi-title">
+      <header class="stats-panel-head">
+        <div>
+          <h2 id="spend-kpi-title">Spend pace</h2>
+          <p class="stats-panel-note" id="spend-kpi-note">How fast the selected window is consumed across the fleet.</p>
+        </div>
+      </header>
+      <div class="spend-kpis" id="spend-kpis"></div>
+    </section>
+
+    <section class="stats-panel panel" aria-labelledby="hour-chart-title">
+      <header class="stats-panel-head">
+        <div>
+          <h2 id="hour-chart-title">Peak hours</h2>
+          <p class="stats-panel-note" id="hour-chart-note">Local hours when used_percent rose. Resets are ignored.</p>
+        </div>
+      </header>
+      <div class="hour-chart" id="hour-chart"></div>
+    </section>
+
     <section class="stats-panel panel" aria-labelledby="history-chart-title">
       <header class="stats-panel-head">
         <div>
@@ -553,6 +700,16 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
         <p class="stats-panel-note" id="summary-window-note">Selected window</p>
       </header>
       <div class="stats-accounts" id="stats-accounts"></div>
+    </section>
+
+    <section class="stats-panel panel" id="pace-board-panel" aria-labelledby="pace-board-title">
+      <header class="stats-panel-head">
+        <div>
+          <h2 id="pace-board-title">Account burn ranking</h2>
+          <p class="stats-panel-note" id="pace-board-note">Ranked by recent spend rate, then time-to-empty. Window percentage, never tokens.</p>
+        </div>
+      </header>
+      <div class="leaderboard-wrap" id="pace-board-wrap"></div>
     </section>
   </div>
 
@@ -575,6 +732,9 @@ const CONFIG = /*__HEADROOM_CONFIG__*/ null;
 const DATA_URL = "usage.json";
 const CACHE_KEY = "headroom-cache-" + ((CONFIG && CONFIG.redact) ? "r" : "f");
 let requestNumber = 0;
+let usageData = null;
+let bootDone = false;
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 /* ------------------------------------------------------------- helpers */
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
@@ -594,9 +754,102 @@ function windowLabel(key){
 }
 function windowColumns(accounts){
   const keys=["5h","7d"];
+  if(accounts.length&&accounts.every(a=>{
+    const w=(a.windows||{})["5h"];
+    return w&&w.freshness==="not_applicable";
+  }))keys.splice(keys.indexOf("5h"),1);
   accounts.forEach(a=>Object.keys(a.windows||{}).forEach(k=>{
     if(k.startsWith("scoped:")&&!keys.includes(k))keys.push(k);}));
   return keys;
+}
+function hourRange(hour){
+  if(!Number.isFinite(hour))return"–";
+  const h=((hour%24)+24)%24;
+  const pad=n=>String(n).padStart(2,"0");
+  return pad(h)+":00–"+pad((h+1)%24)+":00";
+}
+function fmtRate(rate){
+  if(!Number.isFinite(rate)||rate<0.05)return"idle";
+  if(rate<1)return rate.toFixed(2)+"%/h";
+  return (Math.round(rate*10)/10)+"%/h";
+}
+function fmtEta(hours){
+  if(!Number.isFinite(hours))return"not draining";
+  if(hours<=0)return"at cap";
+  if(hours>48)return Math.round(hours/24)+"d to empty";
+  if(hours>=1){
+    const h=Math.floor(hours), m=Math.round((hours-h)*60);
+    return "empty in "+h+"h"+(m?(" "+m+"m"):"");
+  }
+  return "empty in "+Math.max(1,Math.round(hours*60))+"m";
+}
+function fmtSpent(value,key){
+  if(!Number.isFinite(value))return"n/a";
+  const fills=value/100;
+  const pts=Math.round(value*10)/10;
+  if(fills>=1){
+    const unit=key==="5h"?" sessions":key==="7d"?" weeks":" fills";
+    return (Math.round(fills*10)/10)+unit;
+  }
+  return pts+"%";
+}
+function windowPace(w){
+  if(!w||!Number.isFinite(w.used_percent)||!Number.isFinite(w.window_minutes)||w.window_minutes<=0)
+    return null;
+  const total=w.window_minutes*60;
+  if(!Number.isFinite(w.resets_at))return null;
+  const elapsed=clamp(total-(w.resets_at-Date.now()/1e3),90,total);
+  const rate=w.used_percent/(elapsed/3600);
+  const left=clamp(100-w.used_percent,0,100);
+  const eta=rate>0.08?left/rate:null;
+  return {rate:rate, eta:eta, left:left};
+}
+function liveFleetPace(accounts){
+  const rates=[];
+  const soonest=[];
+  let draining=0;
+  (accounts||[]).forEach(account=>{
+    const pace=windowPace((account.windows||{})["5h"]);
+    if(!pace)return;
+    if(pace.rate>0.08){rates.push(pace.rate); draining+=1;}
+    if(pace.eta!=null)soonest.push({name:account.email||account.name, eta:pace.eta});
+  });
+  soonest.sort((a,b)=>a.eta-b.eta);
+  const fleet=rates.length?rates.reduce((sum,value)=>sum+value,0):null;
+  return {rate:fleet, draining:draining, soonest:soonest[0]||null};
+}
+function historyPeakHour(key){
+  const windows=historyData&&historyData.analytics&&historyData.analytics.windows;
+  const metric=windows&&windows[key];
+  return metric&&Number.isFinite(metric.peak_hour)?metric.peak_hour:null;
+}
+function finishBoot(copy){
+  if(copy){
+    const label=document.getElementById("boot-copy");
+    if(label)label.textContent=copy;
+  }
+  if(bootDone)return;
+  bootDone=true;
+  const boot=document.getElementById("boot");
+  document.body.classList.remove("is-booting");
+  document.body.classList.add("is-entering");
+  if(boot){boot.classList.add("is-done");boot.setAttribute("aria-busy","false");}
+  setTimeout(()=>document.body.classList.remove("is-entering"), reducedMotion.matches?0:900);
+}
+function paintUsagePulse(){
+  const live=liveFleetPace((usageData&&usageData.accounts)||[]);
+  const count=usageData&&usageData.accounts?usageData.accounts.length:0;
+  set("pulse-burn", live.rate==null?"–":fmtRate(live.rate));
+  set("pulse-burn-note", live.rate==null?"no session pace yet":"sum of live 5h rates");
+  set("pulse-empty", live.soonest?fmtEta(live.soonest.eta):"not draining");
+  set("pulse-empty-note", live.soonest?live.soonest.name:"all session tanks idle");
+  set("pulse-drain", count?live.draining+"/"+count:"–");
+  set("pulse-drain-note", live.draining?"accounts currently spending":"no active session spend");
+  const peak=historyPeakHour("5h");
+  const weeklyPeak=peak==null?historyPeakHour("7d"):null;
+  const hour=peak!=null?peak:weeklyPeak;
+  set("pulse-peak", hour==null?"–":hourRange(hour));
+  set("pulse-peak-note", hour==null?"needs usage history":(peak!=null?"session spend, local time":"weekly spend, local time"));
 }
 
 /* -------------------------------------------------------------- render */
@@ -628,9 +881,17 @@ function windowMarkup(account,key){
   const w=(account.windows||{})[key]||null;
   const left=capacity(w);
   const unknown=left==null;
-  const note=unknown?(w?"reading unavailable":(key.startsWith("scoped:")?"no scoped cap":"no reading yet")):untilReset(w.resets_at);
+  const note=unknown?(w&&w.freshness==="not_applicable"?"no session window":
+    (w?"reading unavailable":(key.startsWith("scoped:")?"no scoped cap":"no reading yet"))):untilReset(w.resets_at);
+  const pace=unknown?null:windowPace(w);
+  let paceHtml="";
+  if(pace){
+    const hot=pace.eta!=null&&pace.eta<1?" is-critical":pace.rate>=15?" is-hot":"";
+    paceHtml='<p class="win-pace'+hot+'">'+esc(fmtRate(pace.rate))+
+      (pace.eta!=null?" · "+fmtEta(pace.eta):"")+"</p>";
+  }
   return '<div class="win"><span class="win-name">'+esc(windowLabel(key))+"</span>"+
-    ringMarkup(left)+'<p class="win-note">'+esc(note)+"</p></div>";
+    ringMarkup(left)+'<p class="win-note">'+esc(note)+"</p>"+paceHtml+"</div>";
 }
 // Calm, specific state per account. Codex reads its CLI's own telemetry, so
 // idle/limited are EXPECTED states — label them clearly, never as "broken".
@@ -667,7 +928,9 @@ function needsLogin(account){
   return ["claude_local_binding_missing","claude_credentials_missing",
           "claude_refresh_expired","codex_auth_missing",
           "codex_identity_email_missing","codex_reauth_required",
-          "slot_bound_to_unexpected_email"].indexOf(account.error_code||"")>=0;
+          "grok_auth_missing","grok_identity_email_missing",
+          "grok_refresh_expired","slot_bound_to_unexpected_email"]
+          .indexOf(account.error_code||"")>=0;
 }
 function accountActions(account,totalAccounts){
   if(CONFIG&&CONFIG.demo)return"";
@@ -700,7 +963,7 @@ function accountMarkup(account,columns,totalAccounts){
 function providerMarkup(provider,accounts,totalAccounts){
   if(!accounts.length)return"";
   const columns=windowColumns(accounts);
-  const title=provider==="claude"?"Claude":"Codex";
+  const title=provider==="claude"?"Claude":provider==="grok"?"Grok":"Codex";
   const sub="real-time";
   return '<section class="provider"><header class="provider-head">'+
     '<h2 class="provider-name">'+title+'</h2><span class="provider-count">'+
@@ -719,6 +982,7 @@ function validate(data){
   return data;
 }
 function render(data){
+  usageData=data;
   snapStale=!Number.isFinite(data.generated)||Date.now()/1e3-data.generated>1800;
   const accounts=data.accounts;
   const current=accounts.filter(isCurrent);
@@ -729,25 +993,35 @@ function render(data){
   const lowest=readings.length?readings.reduce((b,r)=>r.left<b.left?r:b):null;
   const claude=accounts.filter(a=>a.provider==="claude");
   const codex=accounts.filter(a=>a.provider==="codex");
+  const grok=accounts.filter(a=>a.provider==="grok");
   set("verified",current.length+"/"+accounts.length);
   set("average",avg==null?"n/a":avg+"%");
   set("lowest",lowest?Math.round(lowest.left)+"%":"n/a");
   set("lowest-account",lowest?lowest.who:"no current readings");
   set("account-count",String(accounts.length));
-  set("account-note",(claude.length?("Claude "+claude.length):"")+(claude.length&&codex.length?" · ":"")+(codex.length?("Codex "+codex.length):""));
+  const noteBits=[];
+  if(claude.length)noteBits.push("Claude "+claude.length);
+  if(codex.length)noteBits.push("Codex "+codex.length);
+  if(grok.length)noteBits.push("Grok "+grok.length);
+  set("account-note",noteBits.join(" · "));
   /* top-bar instruments */
   document.getElementById("verified-viz").innerHTML=accounts.map(a=>
     '<span class="seg '+(isCurrent(a)?"is-on":"is-off")+'" title="'+esc(a.name)+": "+(isCurrent(a)?"verified":"held")+'"></span>').join("");
   document.getElementById("average-viz").innerHTML=ringMarkup(avg,"sm","average across current windows");
   document.getElementById("lowest-viz").innerHTML=ringMarkup(lowest?lowest.left:null,"sm",lowest?lowest.who:"no current readings");
   document.getElementById("fleet-viz").innerHTML=accounts.map(a=>{
-    const left=capacity((a.windows||{})["5h"]);
-    return ringMarkup(left,"xs",a.name+": "+(left==null?"unknown":Math.round(left)+"% session left"));
+    const wins=a.windows||{};
+    const session=wins["5h"];
+    const key=(session&&session.freshness==="not_applicable")?"7d":"5h";
+    const left=capacity(wins[key]);
+    const kind=key==="7d"?"weekly":"session";
+    return ringMarkup(left,"xs",a.name+": "+(left==null?"unknown":Math.round(left)+"% "+kind+" left"));
   }).join("");
   set("snapshot-age","snapshot "+age(data.generated));
   set("source-line",current.length+" of "+accounts.length+" verified");
   document.getElementById("providers").innerHTML=
-    providerMarkup("claude",claude,accounts.length)+providerMarkup("codex",codex,accounts.length);
+    providerMarkup("claude",claude,accounts.length)+providerMarkup("codex",codex,accounts.length)+
+    providerMarkup("grok",grok,accounts.length);
   const warnings=(data.integrity_warnings||[]).slice();
   if(snapStale)warnings.unshift("snapshot is over 30 minutes old — readings shown as held until a fresh collect");
   const throttled=accounts.filter(a=>a.error_code==="usage_source_rate_limited");
@@ -759,7 +1033,9 @@ function render(data){
   const status=document.getElementById("status");
   status.textContent=warnings.length?("⚠ "+warnings.join(" — ")):"Full rings are available capacity. Colors show what's left, not what's used.";
   status.className="statusline"+(warnings.length?" is-error":"");
+  paintUsagePulse();
   armRings();
+  finishBoot("Ready");
 }
 function renderError(message){
   document.getElementById("providers").innerHTML=
@@ -770,6 +1046,8 @@ function renderError(message){
   const status=document.getElementById("status");
   status.textContent="Live data could not be verified.";
   status.className="statusline is-error";
+  paintUsagePulse();
+  finishBoot("Usage feed unavailable");
 }
 function set(id,text){document.getElementById(id).textContent=text;}
 
@@ -777,7 +1055,10 @@ function set(id,text){document.getElementById(id).textContent=text;}
 async function load(manual){
   const requestId=++requestNumber;
   const button=document.getElementById("refresh");
-  if(manual){button.disabled=true;button.textContent="Refreshing…";}
+  if(manual){
+    button.disabled=true;button.textContent="Refreshing…";
+    document.body.classList.add("is-refreshing");
+  }
   try{
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),12e3);
@@ -807,7 +1088,10 @@ async function load(manual){
         renderError(error&&error.message?error.message:"unknown feed error");}
     }
   }finally{
-    if(manual&&requestId===requestNumber){button.disabled=false;button.textContent="Refresh";}
+    if(manual&&requestId===requestNumber){
+      button.disabled=false;button.textContent="Refresh";
+      document.body.classList.remove("is-refreshing");
+    }
   }
 }
 
@@ -880,7 +1164,40 @@ function validateHistory(data){
     typeof entry.id==="string"&&typeof entry.name==="string");
   data.leaderboard=data.leaderboard.filter(entry=>entry&&typeof entry==="object"&&!Array.isArray(entry)&&
     typeof entry.id==="string"&&typeof entry.name==="string");
+  data.analytics=sanitizeAnalytics(data.analytics);
   return data;
+}
+function sanitizeRef(value){
+  if(!value||typeof value!=="object"||Array.isArray(value)||typeof value.id!=="string"||typeof value.name!=="string")
+    return null;
+  return {
+    id:value.id, name:value.name, provider:typeof value.provider==="string"?value.provider:"",
+    burn_per_hour:Number.isFinite(value.burn_per_hour)?value.burn_per_hour:null,
+    hours_to_empty:Number.isFinite(value.hours_to_empty)?value.hours_to_empty:null
+  };
+}
+function sanitizeAnalytics(raw){
+  const windows={};
+  const source=raw&&typeof raw==="object"&&!Array.isArray(raw)&&raw.windows&&typeof raw.windows==="object"?raw.windows:{};
+  Object.keys(source).forEach(key=>{
+    const metric=source[key];
+    if(!metric||typeof metric!=="object"||Array.isArray(metric))return;
+    const hourly=Array.isArray(metric.hourly)?metric.hourly.slice(0,24).map(value=>Number.isFinite(value)?value:0):[];
+    while(hourly.length<24)hourly.push(0);
+    windows[key]={
+      burn_per_hour:Number.isFinite(metric.burn_per_hour)?metric.burn_per_hour:null,
+      mean_burn_per_hour:Number.isFinite(metric.mean_burn_per_hour)?metric.mean_burn_per_hour:null,
+      hours_to_empty:Number.isFinite(metric.hours_to_empty)?metric.hours_to_empty:null,
+      spent_in_range:Number.isFinite(metric.spent_in_range)?metric.spent_in_range:0,
+      reset_count:Number.isFinite(metric.reset_count)?metric.reset_count:0,
+      peak_hour:Number.isFinite(metric.peak_hour)?metric.peak_hour:null,
+      draining_accounts:Number.isFinite(metric.draining_accounts)?metric.draining_accounts:0,
+      hourly:hourly,
+      fastest:sanitizeRef(metric.fastest),
+      soonest_empty:sanitizeRef(metric.soonest_empty)
+    };
+  });
+  return {windows:windows};
 }
 function statsPct(value){
   return Number.isFinite(value)?(Math.round(value*10)/10)+"%":"n/a";
@@ -1008,6 +1325,18 @@ function renderHistoryChart(data,key){
     '" x="'+(width-right+8)+'" y="'+label.y.toFixed(2)+'">'+esc(label.value)+"</text>").join("");
   chart.innerHTML='<svg viewBox="0 0 '+width+" "+height+'" role="img" aria-label="'+esc(windowLabel(key))+
     ' window percentage used over time">'+grid+dates+drawing+endLabels+"</svg>";
+  armChartLines(chart);
+}
+function armChartLines(root){
+  if(reducedMotion.matches)return;
+  root.querySelectorAll(".chart-line").forEach(path=>{
+    let length=0;
+    try{length=path.getTotalLength();}catch(e){return;}
+    if(!length)return;
+    path.style.strokeDasharray=String(length);
+    path.style.strokeDashoffset=String(length);
+    requestAnimationFrame(()=>{path.style.strokeDashoffset="0";});
+  });
 }
 function usedTone(percent){
   if(!Number.isFinite(percent))return"var(--cell-bg)";
@@ -1041,8 +1370,91 @@ function renderAccountStats(data,key){
       '</strong><small>window used</small></div><div class="stats-metric"><span>Peak</span><strong>'+statsPct(peak.value)+
       "</strong><small>"+esc(statsDate(peak.ts,false))+'</small></div><div class="stats-metric"><span>Average</span><strong>'+statsPct(metric.average)+
       '</strong><small>'+esc(metric.sample_count)+' samples</small></div><div class="stats-metric"><span>Cap hits</span><strong>'+
-      esc(metric.cap_hit_episodes)+"</strong><small>episodes</small></div></div></article>";
+      esc(metric.cap_hit_episodes)+'</strong><small>episodes</small></div><div class="stats-metric"><span>Burn</span><strong>'+
+      esc(fmtRate(metric.burn_per_hour))+'</strong><small>over range</small></div><div class="stats-metric"><span>Active burn</span><strong>'+
+      esc(fmtRate(metric.active_burn_per_hour))+'</strong><small>while spending</small></div><div class="stats-metric"><span>Empty in</span><strong>'+
+      esc(Number.isFinite(metric.hours_to_empty)?fmtEta(metric.hours_to_empty):"idle")+'</strong><small>'+
+      esc(fmtRate(metric.recent_burn_per_hour))+' recent</small></div><div class="stats-metric"><span>Peak hour</span><strong>'+
+      esc(Number.isFinite(metric.peak_hour)?hourRange(metric.peak_hour):"n/a")+"</strong><small>"+
+      esc((Number.isFinite(metric.spent_in_range)?fmtSpent(metric.spent_in_range,key)+" spent":"no spend")+
+        (metric.reset_count?" · "+metric.reset_count+" resets":""))+"</small></div></div></article>";
   }).join("");
+}
+function fleetMetric(data,key){
+  return data&&data.analytics&&data.analytics.windows?data.analytics.windows[key]||null:null;
+}
+function renderSpendKpis(data,key){
+  const target=document.getElementById("spend-kpis");
+  const note=document.getElementById("spend-kpi-note");
+  const fleet=fleetMetric(data,key);
+  note.textContent="How fast "+windowLabel(key)+" is consumed across the fleet. Window percentage, never tokens.";
+  if(!fleet){
+    target.innerHTML='<div class="stats-inline-empty" style="grid-column:1/-1">No spend analytics for this window yet.</div>';
+    return;
+  }
+  const items=[
+    {label:"Fleet burn", value:fmtRate(fleet.burn_per_hour), note:fleet.mean_burn_per_hour!=null?"mean "+fmtRate(fleet.mean_burn_per_hour):"sum of account rates"},
+    {label:"Peak hour", value:fleet.peak_hour==null?"–":hourRange(fleet.peak_hour), note:fleet.fastest?"fastest "+fleet.fastest.name: "local time"},
+    {label:"Next empty", value:fleet.soonest_empty?fmtEta(fleet.soonest_empty.hours_to_empty):"not draining", note:fleet.soonest_empty?fleet.soonest_empty.name:"no account is draining"},
+    {label:"Spent in range", value:Number.isFinite(fleet.spent_in_range)?fmtSpent(fleet.spent_in_range,key):"–", note:fleet.reset_count?fleet.reset_count+" window resets":(fleet.draining_accounts+" draining")}
+  ];
+  target.innerHTML=items.map(item=>'<div class="pulse-item"><span class="summary-label">'+esc(item.label)+
+    '</span><strong class="summary-value">'+esc(item.value)+'</strong><p class="summary-note">'+esc(item.note)+
+    "</p></div>").join("");
+}
+function renderHourChart(data,key){
+  const target=document.getElementById("hour-chart");
+  const note=document.getElementById("hour-chart-note");
+  const fleet=fleetMetric(data,key);
+  const hourly=fleet&&Array.isArray(fleet.hourly)?fleet.hourly:[];
+  const peak=hourly.length?Math.max.apply(null,hourly):0;
+  note.textContent="Local hours when "+windowLabel(key)+" used_percent rose. Window resets are ignored.";
+  if(!hourly.length||peak<=0){
+    target.className="";
+    target.innerHTML='<div class="stats-inline-empty">No spend has been observed yet in this range.</div>';
+    return;
+  }
+  target.className="hour-chart";
+  target.innerHTML=hourly.map((value,hour)=>{
+    const height=Math.max(4, Math.round(value/peak*100));
+    const busy=value>=peak*0.55;
+    const isPeak=hour===fleet.peak_hour;
+    const marked=hour%3===0||isPeak;
+    return '<div class="hour-col'+(isPeak?" is-peak":"")+(busy?" is-busy":"")+(marked?" is-marked":"")+
+      '" title="'+esc(hourRange(hour)+" · "+(Math.round(value*10)/10)+"% spent")+'">'+
+      '<span class="hour-bar" style="--h:'+height+'%;animation-delay:'+(hour*18)+'ms"></span>'+
+      '<span class="hour-label">'+String(hour).padStart(2,"0")+"</span></div>";
+  }).join("");
+}
+function renderPaceBoard(data,key){
+  const target=document.getElementById("pace-board-wrap");
+  const note=document.getElementById("pace-board-note");
+  note.textContent="Ranked by recent "+windowLabel(key)+" spend rate, then time-to-empty. Window percentage, never tokens.";
+  const rows=data.summary.filter(account=>account&&account.windows&&account.windows[key]).map(account=>{
+    const metric=account.windows[key];
+    return {account:account, metric:metric,
+      rate:Number.isFinite(metric.recent_burn_per_hour)?metric.recent_burn_per_hour:
+           (Number.isFinite(metric.burn_per_hour)?metric.burn_per_hour:-1)};
+  }).sort((a,b)=>b.rate-a.rate||(a.metric.hours_to_empty||999)-(b.metric.hours_to_empty||999)||a.account.name.localeCompare(b.account.name));
+  if(!rows.length){
+    target.innerHTML='<div class="stats-inline-empty">No burn ranking for this window.</div>';
+    return;
+  }
+  const maxRate=Math.max(1, ...rows.map(row=>row.rate>0?row.rate:0));
+  target.innerHTML='<table class="leaderboard"><thead><tr><th scope="col">Rank</th><th scope="col">Account</th>'+
+    '<th scope="col">Burn</th><th scope="col">Active</th><th scope="col">Empty in</th><th scope="col">Peak hour</th>'+
+    '<th scope="col">Spent</th></tr></thead><tbody>'+rows.map((row,index)=>{
+      const metric=row.metric;
+      const width=row.rate>0?Math.min(100,Math.max(6,row.rate/maxRate*100)):0;
+      return '<tr><td class="rank">'+(index+1)+'</td><td class="leader-name">'+esc(row.account.name)+
+        '</td><td><span class="lb-bar" style="--w:'+width+'%;--tone:'+usedTone(Math.min(100,row.rate*8))+
+        '" aria-hidden="true"><i></i></span>'+esc(fmtRate(row.rate))+
+        '</td><td>'+esc(fmtRate(metric.active_burn_per_hour))+
+        '</td><td>'+esc(Number.isFinite(metric.hours_to_empty)?fmtEta(metric.hours_to_empty):"idle")+
+        '</td><td>'+esc(Number.isFinite(metric.peak_hour)?hourRange(metric.peak_hour):"n/a")+
+        '</td><td>'+esc(fmtSpent(metric.spent_in_range,key))+
+        "</td></tr>";
+    }).join("")+"</tbody></table>";
 }
 function renderLeaderboard(data){
   const target=document.getElementById("leaderboard-wrap");
@@ -1055,11 +1467,14 @@ function renderLeaderboard(data){
     return;
   }
   target.innerHTML='<table class="leaderboard"><thead><tr><th scope="col">Rank</th><th scope="col">Account</th>'+
-    '<th scope="col">Provider</th><th scope="col">Avg weekly used</th><th scope="col">Cap hits</th><th scope="col">Samples</th>'+
+    '<th scope="col">Provider</th><th scope="col">Avg weekly used</th><th scope="col">Burn</th><th scope="col">Empty in</th>'+
+    '<th scope="col">Cap hits</th><th scope="col">Samples</th>'+
     '</tr></thead><tbody>'+data.leaderboard.map(account=>'<tr><td class="rank">'+esc(account.rank)+
     '</td><td class="leader-name">'+esc(account.name)+'</td><td>'+esc(account.provider||"")+
     '</td><td><span class="lb-bar" style="--w:'+(Number.isFinite(account.average)?Math.min(100,Math.max(0,account.average)):0)+
     '%;--tone:'+usedTone(account.average)+'" aria-hidden="true"><i></i></span>'+statsPct(account.average)+
+    '</td><td>'+esc(fmtRate(account.recent_burn_per_hour||account.burn_per_hour))+
+    '</td><td>'+esc(Number.isFinite(account.hours_to_empty)?fmtEta(account.hours_to_empty):"idle")+
     '</td><td>'+esc(account.cap_hit_episodes)+'</td><td>'+esc(account.sample_count)+"</td></tr>").join("")+"</tbody></table>";
 }
 function renderStats(){
@@ -1068,14 +1483,19 @@ function renderStats(){
     const keys=populateHistoryWindows(historyData);
     if(!keys.length){
       showStatsState("No usable samples yet","History exists, but no current window percentages are available.",false);
+      paintUsagePulse();
       return;
     }
     const key=document.getElementById("history-window").value;
     document.getElementById("stats-state").hidden=true;
     document.getElementById("stats-content").hidden=false;
+    renderSpendKpis(historyData,key);
+    renderHourChart(historyData,key);
     renderHistoryChart(historyData,key);
     renderAccountStats(historyData,key);
+    renderPaceBoard(historyData,key);
     renderLeaderboard(historyData);
+    paintUsagePulse();
   }catch(error){
     historyData=null;
     showStatsState("History render failed","The saved history could not be displayed. Refresh to try again.",false);
@@ -1099,7 +1519,10 @@ async function loadHistory(manual,background){
   const isCurrent=()=>background
     ? requestId===historyBackgroundRequest&&foregroundAtStart===historyForegroundRequest&&historyForegroundLoads===0
     : requestId===historyForegroundRequest;
-  if(manual){button.disabled=true;button.textContent="Refreshing…";}
+  if(manual){
+    button.disabled=true;button.textContent="Refreshing…";
+    document.body.classList.add("is-refreshing");
+  }
   if(replaceView)showStatsState("Loading history","Reading saved window percentages.",true);
   let timer=null;
   try{
@@ -1117,11 +1540,14 @@ async function loadHistory(manual,background){
       document.getElementById("history-chart-note").textContent=
         "Lines show bucket means; peak markers preserve the highest sample in each bucket."+
         (data.days!==Number(days)?" · showing "+data.days+"d":"");}
-  }catch(error){if(isCurrent()&&replaceView){historyData=null;showHistoryFailure(error);}}
+  }catch(error){if(isCurrent()&&replaceView){historyData=null;showHistoryFailure(error);paintUsagePulse();}}
   finally{
     if(timer!==null)clearTimeout(timer);
     if(!background)historyForegroundLoads--;
-    if(manual){button.disabled=false;button.textContent="Refresh";}
+    if(manual){
+      button.disabled=false;button.textContent="Refresh";
+      document.body.classList.remove("is-refreshing");
+    }
   }
 }
 function syncTabs(){
@@ -1162,6 +1588,8 @@ picker.addEventListener("change",()=>applyTheme(picker.value));
   document.getElementById("refresh").addEventListener("click",()=>load(true));
   initTabs();
   load(false);
+  if(location.hash!=="#stats")loadHistory(false,true);
+  setTimeout(()=>finishBoot("Still waiting on the usage feed…"),8000);
   setInterval(()=>load(false),6e4);
   document.addEventListener("visibilitychange",()=>{if(!document.hidden)load(false);});
 })();

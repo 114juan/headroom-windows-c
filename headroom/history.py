@@ -31,6 +31,11 @@ MAX_LINE_BYTES = 1024 * 1024
 MAX_CHART_POINTS = 200
 READ_DRAIN_BYTES = 64 * 1024
 ID_RE = re.compile(r"^[0-9a-f]{12,32}$")
+# A drop this large is a window reset, not reverse-spend. Small jitter is ignored.
+RESET_DROP = 8.0
+RECENT_BURN_SECONDS = 6 * 3600
+BURN_FLOOR = 0.05
+MAX_ETA_HOURS = 30 * 24
 
 
 def enabled():
@@ -492,6 +497,104 @@ def _episode_count(samples):
     return episodes
 
 
+def _round_or_none(value, digits=2):
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return round(value, digits)
+
+
+def _local_hour(ts):
+    try:
+        return time.localtime(int(ts)).tm_hour
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _empty_burn():
+    return {
+        "burn_per_hour": None,
+        "active_burn_per_hour": None,
+        "recent_burn_per_hour": None,
+        "hours_to_empty": None,
+        "spent_in_range": 0.0,
+        "reset_count": 0,
+        "peak_hour": None,
+        "hourly": [0.0] * 24,
+        "active_hours": 0.0,
+    }
+
+
+def _burn_stats(samples, generated):
+    """Derive spend pace from consecutive used_percent samples.
+
+    Positive deltas are spend. A drop of RESET_DROP or more is a window
+    reset and is not counted as negative usage. Peak hour is local time
+    of the machine serving the dashboard — headroom is a local tool.
+    """
+    empty = _empty_burn()
+    if not samples or len(samples) < 2:
+        return empty
+    hourly = [0.0] * 24
+    spent = 0.0
+    resets = 0
+    active_dt = 0.0
+    recent_spent = 0.0
+    recent_dt = 0.0
+    recent_cutoff = generated - RECENT_BURN_SECONDS
+    for index in range(1, len(samples)):
+        t0, used0 = samples[index - 1]
+        t1, used1 = samples[index]
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        if used1 + RESET_DROP < used0:
+            resets += 1
+            continue
+        delta = used1 - used0
+        if delta <= 0:
+            continue
+        spent += delta
+        active_dt += dt
+        hour = _local_hour(t1)
+        if hour is not None:
+            hourly[hour] += delta
+        if t1 >= recent_cutoff:
+            recent_spent += delta
+            recent_dt += dt
+    span = max(1, samples[-1][0] - samples[0][0])
+    burn = spent / span * 3600 if spent else None
+    active_burn = (spent / active_dt * 3600) if active_dt > 0 else None
+    recent_burn = (recent_spent / recent_dt * 3600) if recent_dt > 0 else burn
+    pace = recent_burn if recent_burn is not None else active_burn
+    remaining = max(0.0, 100.0 - samples[-1][1])
+    hours_to_empty = None
+    if pace is not None and pace > BURN_FLOOR:
+        eta = remaining / pace
+        if eta <= MAX_ETA_HOURS:
+            hours_to_empty = eta
+    peak_hour = None
+    peak_value = max(hourly) if spent else 0.0
+    if peak_value > 0:
+        peak_hour = max(range(24), key=lambda hour: (hourly[hour], -hour))
+    return {
+        "burn_per_hour": _round_or_none(burn),
+        "active_burn_per_hour": _round_or_none(active_burn),
+        "recent_burn_per_hour": _round_or_none(recent_burn),
+        "hours_to_empty": _round_or_none(hours_to_empty),
+        "spent_in_range": round(spent, 2),
+        "reset_count": resets,
+        "peak_hour": peak_hour,
+        "hourly": [round(value, 2) for value in hourly],
+        "active_hours": round(active_dt / 3600, 2),
+    }
+
+
 def summarize(days, rows=None, generated=None, live_ids=None):
     rows = load_series(days, live_ids or set()) if rows is None else rows
     generated = int(time.time() if generated is None else generated)
@@ -505,7 +608,7 @@ def summarize(days, rows=None, generated=None, live_ids=None):
             current = samples[-1][1] \
                 if samples[-1][0] == account["latest_ts"] \
                 and 0 <= age <= current_age_limit else None
-            windows[key] = {
+            metric = {
                 "current": current,
                 "peak": {"value": peak_value, "ts": peak_ts},
                 "average": round(
@@ -515,6 +618,8 @@ def summarize(days, rows=None, generated=None, live_ids=None):
                 "first_ts": samples[0][0],
                 "last_ts": samples[-1][0],
             }
+            metric.update(_burn_stats(samples, generated))
+            windows[key] = metric
         result.append({
             "id": account["id"], "name": account["name"],
             "provider": account["provider"],
@@ -522,6 +627,102 @@ def summarize(days, rows=None, generated=None, live_ids=None):
         })
     return sorted(result, key=lambda item: (
         item["name"], item["provider"], item["id"]))
+
+
+def _window_sort_key(key):
+    if key == "5h":
+        return (0, key)
+    if key == "7d":
+        return (1, key)
+    if key.startswith("scoped:"):
+        return (2, key)
+    return (3, key)
+
+
+def _pace_ref(account, metric, rate_key, eta=None):
+    rate = metric.get(rate_key)
+    if rate is None:
+        rate = metric.get("burn_per_hour")
+    ref = {
+        "id": account["id"], "name": account["name"],
+        "provider": account["provider"],
+        "burn_per_hour": rate,
+    }
+    if eta is not None:
+        ref["hours_to_empty"] = eta
+    return ref
+
+
+def analytics(days, rows=None, generated=None, live_ids=None, summary=None):
+    """Fleet spend pace, peak local hours, and time-to-empty rollups."""
+    generated = int(time.time() if generated is None else generated)
+    summary = summarize(days, rows=rows, generated=generated,
+                        live_ids=live_ids) if summary is None else summary
+    keys = set()
+    for account in summary:
+        keys.update(account.get("windows") or {})
+    windows = {}
+    for key in sorted(keys, key=_window_sort_key):
+        hourly = [0.0] * 24
+        spent = 0.0
+        resets = 0
+        remaining = 0.0
+        recent_rates = []
+        fastest = None
+        soonest = None
+        draining = 0
+        for account in summary:
+            metric = (account.get("windows") or {}).get(key)
+            if not isinstance(metric, dict):
+                continue
+            values = metric.get("hourly") or []
+            for hour in range(min(24, len(values))):
+                try:
+                    hourly[hour] += float(values[hour] or 0)
+                except (TypeError, ValueError):
+                    continue
+            spent += metric.get("spent_in_range") or 0
+            resets += metric.get("reset_count") or 0
+            current = metric.get("current")
+            if current is not None:
+                remaining += max(0.0, 100.0 - current)
+            rate = metric.get("recent_burn_per_hour")
+            if rate is None:
+                rate = metric.get("burn_per_hour")
+            if rate is not None and rate > BURN_FLOOR:
+                recent_rates.append(rate)
+                draining += 1
+                if fastest is None or rate > fastest["burn_per_hour"]:
+                    fastest = _pace_ref(account, metric, "recent_burn_per_hour")
+            eta = metric.get("hours_to_empty")
+            if eta is not None and (soonest is None
+                                    or eta < soonest["hours_to_empty"]):
+                soonest = _pace_ref(account, metric, "recent_burn_per_hour",
+                                    eta=eta)
+        peak_hour = None
+        if max(hourly) > 0:
+            peak_hour = max(range(24), key=lambda hour: (hourly[hour], -hour))
+        fleet_burn = sum(recent_rates) if recent_rates else None
+        mean_burn = (sum(recent_rates) / len(recent_rates)
+                     if recent_rates else None)
+        fleet_eta = None
+        if fleet_burn is not None and fleet_burn > BURN_FLOOR:
+            eta = remaining / fleet_burn
+            if eta <= MAX_ETA_HOURS:
+                fleet_eta = eta
+        windows[key] = {
+            "burn_per_hour": _round_or_none(fleet_burn),
+            "mean_burn_per_hour": _round_or_none(mean_burn),
+            "hours_to_empty": _round_or_none(fleet_eta),
+            "spent_in_range": round(spent, 2),
+            "reset_count": resets,
+            "peak_hour": peak_hour,
+            "hourly": [round(value, 2) for value in hourly],
+            "fastest": fastest,
+            "soonest_empty": soonest,
+            "draining_accounts": draining,
+        }
+    return {"windows": windows}
 
 
 def _bucket(samples):
@@ -559,10 +760,12 @@ def chart_series(days, rows=None, live_ids=None):
         item["name"], item["provider"], item["id"]))
 
 
-def leaderboard(days, rows=None, generated=None, live_ids=None):
+def leaderboard(days, rows=None, generated=None, live_ids=None, summary=None):
     rows = load_series(days, live_ids or set()) if rows is None else rows
     ranked = []
-    for account in summarize(days, rows=rows, generated=generated):
+    accounts = summary if summary is not None else summarize(
+        days, rows=rows, generated=generated)
+    for account in accounts:
         weekly = account["windows"].get("7d")
         if weekly is None:
             continue
@@ -574,6 +777,11 @@ def leaderboard(days, rows=None, generated=None, live_ids=None):
             "cap_hit_episodes": weekly["cap_hit_episodes"],
             "current": weekly["current"], "peak": weekly["peak"],
             "sample_count": weekly["sample_count"],
+            "burn_per_hour": weekly.get("burn_per_hour"),
+            "recent_burn_per_hour": weekly.get("recent_burn_per_hour"),
+            "hours_to_empty": weekly.get("hours_to_empty"),
+            "peak_hour": weekly.get("peak_hour"),
+            "spent_in_range": weekly.get("spent_in_range"),
         })
     ranked.sort(key=lambda item: (
         -item["average"], -item["cap_hit_episodes"],
@@ -587,11 +795,15 @@ def response(days, live_ids, rows=None, generated=None):
     rows = load_series(days, live_ids) if rows is None \
         else _filter_live_rows(rows, live_ids)
     generated = int(time.time() if generated is None else generated)
+    summary = summarize(days, rows=rows, generated=generated)
     return {
         "schema_version": SCHEMA_VERSION, "generated": generated,
         "days": int(days), "series": chart_series(days, rows=rows),
-        "summary": summarize(days, rows=rows, generated=generated),
-        "leaderboard": leaderboard(days, rows=rows, generated=generated),
+        "summary": summary,
+        "leaderboard": leaderboard(
+            days, rows=rows, generated=generated, summary=summary),
+        "analytics": analytics(
+            days, rows=rows, generated=generated, summary=summary),
     }
 
 
@@ -607,6 +819,9 @@ def demo_rows(snapshot, days, now=None):
         ts = now - span + round(span * index / (points - 1))
         fraction = index / (points - 1)
         accounts = []
+        hour = time.localtime(ts).tm_hour
+        # Workday-shaped demo spend so the peak-hour heatmap is readable.
+        heat = max(0.0, math.sin((hour - 8) / 12.0 * math.pi))
         for account_index, account in enumerate(source):
             windows = {}
             for window_index, (key, window) in enumerate(
@@ -618,11 +833,12 @@ def demo_rows(snapshot, days, now=None):
                     used = base
                 elif key == "5h":
                     cycle = (index % 8) / 7
-                    used = base * .3 + cycle * max(12, base * .7)
+                    used = base * .25 + cycle * max(12, base * .75) * (
+                        0.4 + 0.6 * heat)
                 else:
                     wave = math.sin((index + account_index * 3
                                      + window_index) * .48) * 6
-                    used = base * (.52 + .48 * fraction) + wave
+                    used = base * (.52 + .48 * fraction) + wave + heat * 4
                 windows[key] = {
                     "used_percent": round(min(100, max(0, used)), 2),
                     "resets_at": window["resets_at"],

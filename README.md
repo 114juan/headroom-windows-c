@@ -1,11 +1,12 @@
 # headroom
 
-**Never hit a Claude or Codex usage limit mid-flight again.**
+**Never hit a Claude, Codex, or Grok usage limit mid-flight again.**
 
-headroom tracks the remaining capacity of every Claude and ChatGPT/Codex
-subscription you own — *without spending a single token* — puts it on a live
-dashboard you'll actually want to look at, and rotates your tools to the next
-account with headroom the moment one hits a limit.
+headroom tracks the remaining capacity of every Claude, ChatGPT/Codex, and
+Grok Build (SuperGrok) subscription you own — *without spending a single
+token* — puts it on a live dashboard you'll actually want to look at, and
+rotates your tools to the next account with headroom the moment one hits a
+limit.
 
 ![headroom demo](marketing/headroom-demo.gif)
 
@@ -27,10 +28,10 @@ live from the dashboard. The setup wizard asks how you want it to look.
 
 ## Why this exists
 
-If you run more than one Claude or ChatGPT subscription (work + personal +
-team), you know the drill: a session dies with *"you've hit your limit"*, you
-have no idea how much is left on the other accounts, and you burn ten minutes
-logging in and out to find out.
+If you run more than one Claude, ChatGPT, or Grok subscription (work +
+personal + team), you know the drill: a session dies with *"you've hit your
+limit"*, you have no idea how much is left on the other accounts, and you
+burn ten minutes logging in and out to find out.
 
 headroom fixes all three problems:
 
@@ -46,7 +47,7 @@ headroom fixes all three problems:
 
 ## Quickstart
 
-Requirements: Python 3.9+ (stdlib only — no pip installs except graphifyy), macOS, Linux, or Windows, and the `claude` and/or `codex` CLIs you already use. (On macOS, connect Claude accounts with a fresh `headroom connect` login rather than adopting the Keychain-backed default — see [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).)
+Requirements: Python 3.9+ (stdlib only — no pip installs except graphifyy), macOS, Linux, or Windows, and the `claude`, `codex`, and/or `grok` CLIs you already use. (On macOS, connect Claude accounts with a fresh `headroom connect` login rather than adopting the Keychain-backed default — see [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).)
 
 **On macOS/Linux:**
 ```bash
@@ -69,10 +70,10 @@ headroom setup
 Want to see it before connecting anything? `headroom serve --demo` opens the
 dashboard on bundled sample data — it's exactly what the screenshots show.
 
-The wizard finds logins already on your machine (`~/.claude`, `~/.codex`) and
-adopts them in place — credentials are never moved, copied, or read beyond
-what's needed to verify who's logged in. Extra accounts get their own isolated
-config home and log in through the provider's own flow.
+The wizard finds logins already on your machine (`~/.claude`, `~/.codex`,
+`~/.grok`) and adopts them in place — credentials are never moved, copied, or
+read beyond what's needed to verify who's logged in. Extra accounts get their
+own isolated config home and log in through the provider's own flow.
 
 Then:
 
@@ -96,7 +97,7 @@ headroom rotate            # limit hit? cool this login, switch to the next
 | `headroom status [model]` | table: every account, its windows, and exactly why any is skipped |
 | `headroom pick <model>` | print the best account name (exit 2 if none) — script-friendly |
 | `headroom env <model>` | print the `export CLAUDE_CONFIG_DIR=...` line for the best account |
-| `headroom claude` / `codex [args]` | launch the CLI on the best account |
+| `headroom claude` / `codex` / `grok [args]` | launch the CLI on the best account |
 | `headroom run <model> -- <cmd>` | headless run with automatic rotation on limit-hit |
 | `headroom rotate [model]` | cool the current account, hand you the next |
 | `headroom serve [--open]` | local live dashboard (auto-refreshes stale data) |
@@ -124,9 +125,17 @@ headroom rotate            # limit hit? cool this login, switch to the next
   (On an older Codex CLI without the app-server, headroom falls back to a
   best-effort session-log read and the router holds those accounts until a
   fresh reading appears.)
+- **Grok — real-time.** SuperGrok's weekly usage pool is read from the same
+  CLI-proxy billing feed the Grok CLI uses for `/usage`
+  (`cli-chat-proxy.grok.com/v1/billing`), authenticated with the slot's
+  `GROK_HOME/auth.json` token. Identity is the OIDC user (or team) id bound
+  in that file. Grok has no 5-hour session window — the dashboard and router
+  use the weekly pool. Near-expiry tokens are refreshed over `auth.x.ai`
+  without spawning `grok` and without spending inference. Isolated slots use
+  `GROK_HOME`, same idea as `CLAUDE_CONFIG_DIR`.
 
-Every account is optional — run only Claude, only Codex, or both. Both
-providers are read live, identity-bound, and fully routed.
+Every account is optional — run only Claude, only Codex, only Grok, or mix
+them. All three providers are read live, identity-bound, and fully routed.
 - Snapshots are written atomically. The dashboard gets a sanitized projection
   (optionally with emails redacted) — raw identity material stays in the
   private state directory with `0600` permissions.

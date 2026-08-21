@@ -50,29 +50,51 @@ def main():
         return 0
     rows = {row["name"]: row for row in snapshot.get("accounts", [])
             if isinstance(row, dict) and row.get("name")}
-    current_home = os.path.realpath(
-        os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")))
     current = None
     try:
         for account in registry.accounts():
-            if os.path.normcase(os.path.realpath(account["home"])) == os.path.normcase(current_home):
+            env_name = registry.HOME_ENV.get(account["provider"])
+            hinted = os.environ.get(env_name) if env_name else None
+            home = os.path.realpath(account["home"])
+            if hinted and os.path.normcase(os.path.realpath(
+                    os.path.expanduser(hinted))) == os.path.normcase(home):
                 current = account
                 break
+            if env_name == "CLAUDE_CONFIG_DIR" and not hinted:
+                default = os.path.realpath(os.path.expanduser("~/.claude"))
+                if os.path.normcase(home) == os.path.normcase(default):
+                    current = account
+                    break
     except registry.RegistryError:
         pass
+    if current is None:
+        try:
+            current_home = os.path.realpath(
+                os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")))
+            for account in registry.accounts():
+                if os.path.normcase(os.path.realpath(account["home"])) == os.path.normcase(current_home):
+                    current = account
+                    break
+        except registry.RegistryError:
+            pass
     parts = []
     if current and current["name"] in rows:
         row = rows[current["name"]]
         windows = row.get("windows") or {}
         parts.append(f"{current['name']}")
-        parts.append(window_text(windows, "5h", "5h"))
+        if current.get("provider") != "grok":
+            parts.append(window_text(windows, "5h", "5h"))
         parts.append(window_text(windows, "7d", "7d"))
-        used = (windows.get("5h") or {}).get("used_percent")
+        probe = windows.get("7d") if current.get("provider") == "grok" \
+            else windows.get("5h")
+        used = (probe or {}).get("used_percent")
         if used is not None and used >= 75:
             from . import route
+            fam = "grok" if current.get("provider") == "grok" else (
+                "codex" if current.get("provider") == "codex" else "claude")
             candidate = next(
                 (account for account, reason in route.candidates(
-                    "claude", snapshot)
+                    fam, snapshot)
                  if reason is None and account["name"] != current["name"]),
                 None)
             if candidate:

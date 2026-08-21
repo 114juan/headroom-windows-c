@@ -19,8 +19,8 @@
               ┌──────────────┐      ┌──────────────┐
               │  dashboard   │      │    route     │
               │ index.html + │      │ pick/run/    │──► CLAUDE_CONFIG_DIR /
-              │  usage.json  │      │ rotate +     │    CODEX_HOME env for
-              │  (5 themes)  │      │ cooldowns    │    the chosen account
+              │  usage.json  │      │ rotate +     │    CODEX_HOME / GROK_HOME
+              │  (5 themes)  │      │ cooldowns    │
               └──────────────┘      └──────────────┘
 ```
 
@@ -67,9 +67,10 @@ token holds the slot with `claude_refresh_expired` and tells you to run
 
 | window | provider | meaning |
 |---|---|---|
-| `5h` | both | rolling session window |
-| `7d` | both | weekly all-models window |
+| `5h` | Claude, Codex | rolling session window (Grok has none) |
+| `7d` | all | weekly all-models / SuperGrok weekly pool |
 | `scoped:<Model>` | Claude | weekly cap for a specific model tier (e.g. Opus) |
+| `scoped:Extra` | Grok | Extra Usage Credits, when an on-demand cap is present |
 
 The dashboard and router treat *remaining* capacity (100 − used) as the
 primary number. The router additionally honours provider `severity` flags and

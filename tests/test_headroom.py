@@ -68,6 +68,8 @@ class RegistryValidation(unittest.TestCase):
     def test_known_families(self):
         self.assertEqual(registry.family("claude-opus-4"), "opus")
         self.assertEqual(registry.family("gpt-5.6-codex"), "codex")
+        self.assertEqual(registry.family("grok-4.6"), "grok")
+        self.assertEqual(registry.family("grok-build"), "grok")
         self.assertEqual(registry.family(""), "claude")
 
 
@@ -1010,7 +1012,146 @@ class ClaudeTokenRefresh(unittest.TestCase):
         runner.assert_not_called()
 
 
+class GrokProvider(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self.home = os.path.join(self.tmpdir, "slot")
+        os.makedirs(self.home)
+        self.now = time.time()
+        self._orig_binding = collect.local_binding
+        collect.local_binding = lambda provider, home: ("AAAA", "BBBB")
+
+    def tearDown(self):
+        import shutil
+        collect.local_binding = self._orig_binding
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_auth(self, **over):
+        from headroom import paths
+        entry = {
+            "auth_mode": "oidc",
+            "key": "access-token",
+            "refresh_token": "refresh-token",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "email": "grok@example.test",
+            "user_id": "user-1",
+            "team_id": "team-1",
+            "principal_type": "User",
+            "oidc_client_id": "client-1",
+            "oidc_issuer": "https://auth.x.ai",
+        }
+        entry.update(over)
+        paths.write_json_atomic(
+            os.path.join(self.home, "auth.json"),
+            {"https://auth.x.ai::client-1": entry}, mode=0o600)
+        return entry
+
+    def test_select_auth_prefers_oidc(self):
+        from headroom import grok as grok_provider
+        root = {
+            "https://accounts.x.ai/sign-in": {"key": "legacy", "email": "a@x.com"},
+            "https://auth.x.ai::abc": {"key": "oidc", "email": "b@x.com"},
+        }
+        scope, entry = grok_provider.select_auth_entry(root)
+        self.assertTrue(scope.startswith("https://auth.x.ai::"))
+        self.assertEqual(entry["key"], "oidc")
+
+    def test_parse_credits_percent_and_period(self):
+        from headroom import grok as grok_provider
+        parsed = grok_provider.parse_credits({
+            "config": {
+                "creditUsagePercent": 41.2,
+                "currentPeriod": {"end": "2026-08-28T00:00:00Z"},
+                "onDemandCap": {"val": 1000},
+                "onDemandUsed": {"val": 250},
+                "subscriptionTier": "supergrok",
+            }
+        })
+        self.assertAlmostEqual(parsed["used_percent"], 41.2)
+        self.assertEqual(parsed["resets_at"], "2026-08-28T00:00:00Z")
+        self.assertAlmostEqual(parsed["extra_percent"], 25.0)
+
+    def test_parse_credits_zero_when_period_but_no_percent(self):
+        from headroom import grok as grok_provider
+        parsed = grok_provider.parse_credits({
+            "config": {"billingPeriodEnd": "2026-08-28T00:00:00Z"}
+        })
+        self.assertEqual(parsed["used_percent"], 0.0)
+
+    def test_identity_from_auth_file(self):
+        self._write_auth()
+        identity = collect.grok_identity(self.home)
+        self.assertEqual(identity["email"], "grok@example.test")
+        self.assertEqual(identity["method"], "grok_local_auth")
+        self.assertTrue(identity["account_fingerprint"])
+        self.assertTrue(identity["credential_digest"])
+
+    def test_limits_maps_weekly_pool(self):
+        self._write_auth()
+        opener = _ScriptedOpener([
+            (200, {"config": {
+                "creditUsagePercent": 12.0,
+                "currentPeriod": {"end": "2026-08-28T00:00:00Z"},
+            }}),
+            (200, {"subscription_tier_display": "SuperGrok Heavy"}),
+        ])
+        identity, plan, windows = collect.grok_limits(
+            self.home, opener=opener, now=self.now)
+        self.assertEqual(plan, "SuperGrok Heavy")
+        self.assertEqual(windows["7d"]["used_percent"], 12.0)
+        self.assertEqual(windows["5h"]["freshness"], "not_applicable")
+        self.assertTrue(identity["verified"])
+        collect.validate_required_windows(windows, "grok")
+
+    def test_team_403_holds(self):
+        self._write_auth(principal_type="Team")
+        opener = _ScriptedOpener([(403, {"error": "team"})])
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.grok_limits(self.home, opener=opener, now=self.now)
+        self.assertEqual(ctx.exception.code, "grok_team_usage_unsupported")
+
+    def test_refresh_rewrites_access_token(self):
+        self._write_auth(expires_at="2000-01-01T00:00:00Z")
+        opener = _ScriptedOpener([
+            (200, {"access_token": "new-access", "expires_in": 3600,
+                   "refresh_token": "new-refresh"}),
+        ])
+        self.assertTrue(collect.refresh_grok_token(
+            self.home, opener=opener, now=self.now))
+        from headroom import paths
+        auth = paths.load_json(os.path.join(self.home, "auth.json"))
+        entry = next(iter(auth.values()))
+        self.assertEqual(entry["key"], "new-access")
+        self.assertEqual(entry["refresh_token"], "new-refresh")
+
+    def test_router_uses_weekly_window_only(self):
+        account = {"name": "g", "provider": "grok", "home": self.home}
+        row = {
+            "name": "g", "ok": True, "routable": True,
+            "trust_state": "verified", "stale": False,
+            "captured_at": self.now,
+            "identity": {"account_fingerprint": "AAAA",
+                         "credential_digest": "BBBB"},
+            "windows": {
+                "5h": {"used_percent": None, "freshness": "not_applicable"},
+                "7d": {"used_percent": 40.0},
+            },
+        }
+        self.assertIsNone(route.block_reason(account, "grok", row, {}, self.now))
+        row["windows"]["7d"]["used_percent"] = 100.0
+        self.assertIn("7d", route.block_reason(account, "grok", row, {}, self.now))
+
+    def test_env_and_registry(self):
+        self.assertEqual(route.env_key({"provider": "grok"}), "GROK_HOME")
+        cfg = {"schema_version": 1, "accounts": [
+            {"name": "g1", "provider": "grok", "home": self.home}]}
+        self.assertEqual(registry.validate(cfg), cfg)
+        self.assertEqual(registry.family_provider("grok"), "grok")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

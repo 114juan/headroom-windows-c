@@ -94,7 +94,7 @@ def run_setup():
     # -- 2. connect more accounts ------------------------------------------
     while ask_yes_no("\nConnect another account (opens the provider's own "
                      "login flow)?", False):
-        provider = connect.prompt_choice("Provider?", ["claude", "codex"])
+        provider = connect.prompt_choice("Provider?", list(registry.PROVIDERS))
         taken = {account["name"] for account in config["accounts"]}
         default_name = next(candidate for candidate in
                             [f"{provider}-{index}" for index in range(1, 100)]
@@ -172,5 +172,6 @@ def run_setup():
     print("  headroom serve --open     live dashboard in your browser")
     print("  headroom status sonnet    who has headroom right now")
     print("  headroom claude           launch Claude Code on the best account")
+    print("  headroom grok             launch Grok Build on the best account")
     print("  headroom rotate           switch accounts when you hit a limit")
     return 0

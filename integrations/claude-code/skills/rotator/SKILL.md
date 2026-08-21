@@ -10,7 +10,7 @@ limit. Powered by the `headroom` CLI (https://github.com/domanski-ai/headroom).
 
 ## When to fire
 
-- The user types `/rotator` or `/rotate` (optionally with a model, default `claude`).
+- The user types `/rotator` or `/rotate` (optionally with a model, default `claude`; use `grok` or `codex` when that is the limited session).
 - A command or session fails with a session/weekly/usage-limit or 429 error.
 - The user asks which account has capacity, or says they are out of usage/tokens.
 
@@ -45,7 +45,7 @@ limit. Powered by the `headroom` CLI (https://github.com/domanski-ai/headroom).
 - Cooldowns are fail-closed: if headroom says nobody has proven capacity,
   believe it. Do not retry the limited account "just in case".
 - The new account takes effect for NEW processes that inherit
-  `CLAUDE_CONFIG_DIR` (or `CODEX_HOME`). The current interactive session keeps
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME`. The current interactive session keeps
   its own login — but the conversation follows: exiting and running
   `headroom claude -c` resumes it on the new account with full history.
 - Recommend `headroom share-history` once if the `conversation:` line says

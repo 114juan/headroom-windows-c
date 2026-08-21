@@ -71,6 +71,22 @@ is near, but if both have already lapsed the slot is held with
 `claude_refresh_expired` — only `headroom connect <name>` can mint a new
 login. Leaving the dashboard/collector off overnight can miss the window.
 
+## Grok billing is the CLI-proxy feed, not a public usage API
+
+Grok SuperGrok remaining allowance is read from
+`https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the local
+`auth.json` bearer — the same path the Grok CLI uses for `/usage`. xAI does
+not publish this as a third-party API. If the feed changes shape or auth,
+headroom holds the slot (`grok_billing_unavailable`) instead of guessing.
+Team principals have no supported usage surface yet and are held with
+`grok_team_usage_unsupported`. API keys (`XAI_API_KEY`) are pay-per-token
+rate limits, not the SuperGrok weekly pool, and are not treated as
+subscription headroom.
+
+Grok has no 5-hour session window. Routing and rotation use the weekly
+pool only. Isolated slots are `GROK_HOME` directories; `grok login` writes
+`auth.json` there.
+
 ## File-based credentials required (macOS Keychain caveat)
 
 headroom reads usage tokens from files (`.credentials.json`, `auth.json`).

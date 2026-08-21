@@ -3,11 +3,12 @@
 Two paths:
 
 * ``adopt``   — register a login that already exists on this machine
-                (your current ``~/.claude`` or ``~/.codex``). Zero friction:
-                headroom just reads it, it never moves or copies credentials.
+                (your current ``~/.claude``, ``~/.codex``, or ``~/.grok``).
+                Zero friction: headroom just reads it, it never moves or
+                copies credentials.
 * ``fresh``   — create an isolated config home under ``~/.headroom/homes/``
                 and run the provider's own interactive login inside it
-                (``claude auth login`` / ``codex login``).
+                (``claude auth login`` / ``codex login`` / ``grok login``).
 
 Every fresh login is verified afterwards: if it bound the slot to an identity
 that is already connected on another slot, the credentials are rolled back and
@@ -26,12 +27,14 @@ from . import paths, registry
 CREDENTIAL_FILES = {
     "claude": [".credentials.json", ".claude.json"],
     "codex": ["auth.json"],
+    "grok": ["auth.json"],
 }
-DEFAULT_HOMES = {"claude": "~/.claude", "codex": "~/.codex"}
+DEFAULT_HOMES = dict(registry.DEFAULT_HOMES)
 
 
 def provider_binary(provider):
-    return shutil.which("claude" if provider == "claude" else "codex")
+    binary = {"claude": "claude", "codex": "codex", "grok": "grok"}.get(provider)
+    return shutil.which(binary) if binary else None
 
 
 def login_argv(provider, binary):
@@ -43,6 +46,8 @@ def slot_identity(provider, home):
     try:
         if provider == "claude":
             identity = collector.claude_identity(home)
+        elif provider == "grok":
+            identity = collector.grok_identity(home)
         else:
             identity = collector.codex_identity(home)
         return identity
@@ -55,10 +60,7 @@ def detect_existing():
     found = []
     for provider, default in DEFAULT_HOMES.items():
         home = os.path.expanduser(
-            os.environ.get(
-                "CLAUDE_CONFIG_DIR" if provider == "claude" else "CODEX_HOME",
-                default,
-            )
+            os.environ.get(registry.HOME_ENV[provider], default)
         )
         if not os.path.isdir(home):
             continue
@@ -160,8 +162,8 @@ def connect_fresh(config, name, provider, quiet=False):
     """Isolated home + interactive provider login + verify + rollback."""
     binary = provider_binary(provider)
     if not binary:
-        print(f"cannot find the `{'claude' if provider == 'claude' else 'codex'}` "
-              f"CLI on PATH — install it first", file=sys.stderr)
+        print(f"cannot find the `{provider}` CLI on PATH — install it first",
+              file=sys.stderr)
         return None
     if not registry.NAME_RE.fullmatch(name):
         print(f"slot name {name!r} invalid: lowercase letters, digits, - and _ "
@@ -192,7 +194,7 @@ def connect_fresh(config, name, provider, quiet=False):
                     os.remove(target)
 
     env = collector.scrubbed_env()
-    env["CLAUDE_CONFIG_DIR" if provider == "claude" else "CODEX_HOME"] = home
+    env[registry.HOME_ENV[provider]] = home
     if not quiet:
         print(f"\nStarting the {provider} login for slot '{name}'.")
         print("Complete the browser flow with the account you want on THIS slot.\n")
@@ -252,7 +254,7 @@ def connect_adopt(config, name, provider, home, quiet=False):
 
 
 def cmd_connect(args):
-    """CLI: `headroom connect [name] [--provider claude|codex] [--adopt PATH]`."""
+    """CLI: `headroom connect [name] [--provider claude|codex|grok] [--adopt PATH]`."""
     try:
         config = registry.load()
     except registry.RegistryError:
@@ -287,7 +289,7 @@ def cmd_connect(args):
     else:
         if provider not in registry.PROVIDERS:
             provider = prompt_choice("Which provider is this account for?",
-                                     ["claude", "codex"])
+                                     list(registry.PROVIDERS))
         if name is None:
             taken = {account["name"] for account in config.get("accounts", [])}
             default = next(

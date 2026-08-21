@@ -1,9 +1,9 @@
 """headroom — usage tracking, live dashboard, and account rotation
-for Claude Code and Codex subscriptions.
+for Claude Code, Codex, and Grok Build subscriptions.
 
 usage:
   headroom setup                    first-run wizard (accounts + dashboard style)
-  headroom connect [name] [--provider claude|codex] [--adopt PATH]
+  headroom connect [name] [--provider claude|codex|grok] [--adopt PATH]
                                     add an account, or re-login an existing slot
   headroom reconnect <name>         re-login an existing slot (same as connect)
   headroom collect                  read usage for every account (no tokens spent)
@@ -12,6 +12,7 @@ usage:
   headroom env <model>              print the export line for the best account
   headroom claude [args...]         launch Claude Code on the best account
   headroom codex [args...]          launch Codex on the best account
+  headroom grok [args...]           launch Grok Build on the best account
   headroom run <model> -- <cmd...>  headless run with auto-rotation on limit-hit
   headroom rotate [model] [--launch]
                                     cool the current account down, pick the next;
@@ -65,7 +66,7 @@ def _slot_has_creds(account):
     import os
     home = account.get("home") or ""
     filename = ".credentials.json" if account.get("provider") == "claude" \
-        else "auth.json"
+        else "auth.json"  # Codex and Grok both store tokens in auth.json
     return os.path.isfile(os.path.join(home, filename))
 
 
@@ -160,9 +161,9 @@ def _dispatch(argv):
             print(f"export {route.env_key(account)}={shlex.quote(account['home'])}"
                   f"  # account={account['name']}")
         return 0
-    if command in ("claude", "codex"):
+    if command in ("claude", "codex", "grok"):
         from . import route
-        provider_cmd = "claude" if command == "claude" else "codex"
+        provider_cmd = command
         # honour an explicit model flag (both `--model X` and `--model=X`) so a
         # scoped weekly cap (e.g. Opus) gates the routing decision
         model = None
@@ -354,7 +355,7 @@ def _dispatch(argv):
             print(f"HEADROOM_DIR {paths.base_dir()}")
         except ValueError as error:
             print(f"HEADROOM_DIR INVALID: {error}")
-        for cli in ("claude", "codex"):
+        for cli in ("claude", "codex", "grok"):
             found = shutil.which(cli)
             print(f"{cli:<10} {found or 'not found on PATH'}")
         try:
