@@ -19,8 +19,11 @@ that file. No inference tokens spent.
 Fail-closed rules:
   * an account with unverifiable identity or an out-of-range reading is HELD
     (ok=false) rather than guessed at;
-  * a 429 from the usage endpoint sets a provider-wide backoff ledger honoured
-    by later runs;
+  * a 429 from the Claude usage endpoint binds to THAT slot's token only
+    (verified live: sibling tokens answer 200 in the same second), so just
+    that slot is held until its Retry-After and a per-account backoff ledger
+    keeps later runs from re-hitting it; a Grok 429 still sets a
+    provider-wide backoff;
   * snapshots are written atomically, and a sanitized public projection is
     derived for the dashboard (optionally with emails redacted).
 """
@@ -64,7 +67,10 @@ ACCESS_REFRESH_SKEW = 300  # refresh when access dies in < 5 min
 REFRESH_PROACTIVE_SKEW = 3600
 DEFAULT_ACCESS_TTL = 28800
 DEFAULT_REFRESH_TTL = 10800  # 3h guess when the server rotates but omits expiry
-CLAUDE_UA = "claude-cli/2.1.201 (external, cli)"
+CLAUDE_UA = "claude-cli/2.1.257 (external, cli)"
+# Same endpoint + beta flag the Claude Code CLI's own ``fetchUtilization``
+# hits (GET /api/oauth/usage). Verified against claude-cli 2.1.257.
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 # Operator should re-login these slots (`headroom connect <name>`).
 RECONNECT_CODES = frozenset({
@@ -95,9 +101,14 @@ class IdentityBindingError(ValueError):
 
 
 class ProviderThrottleError(RuntimeError):
-    def __init__(self, retry_at, provider_response=False):
+    """``scope`` is "account" when the throttle binds to one slot's token
+    (Claude's ``/api/oauth/usage`` 429) or "provider" when every slot of
+    that provider must wait (Grok billing feed)."""
+
+    def __init__(self, retry_at, provider_response=False, scope="provider"):
         self.retry_at = int(retry_at)
         self.provider_response = provider_response
+        self.scope = scope
         super().__init__("usage_source_rate_limited")
 
 
@@ -895,6 +906,25 @@ def refresh_claude_token(home, opener=None, token_urls=None, now=None):
     return True
 
 
+def _usage_request(access_token):
+    return urllib.request.Request(
+        CLAUDE_USAGE_URL,
+        headers={
+            "authorization": "Bearer " + access_token,
+            "anthropic-beta": "oauth-2025-04-20",
+            "anthropic-version": "2023-06-01",
+            "user-agent": CLAUDE_UA,
+        },
+    )
+
+
+def _usage_throttle(error):
+    # Anthropic throttles /api/oauth/usage per token: a 429 here means THIS
+    # slot waits out Retry-After while its siblings keep reading.
+    return ProviderThrottleError(
+        retry_after_epoch(error.headers), provider_response=True, scope="account")
+
+
 def claude_limits(home, expected_fingerprint, opener=open_authenticated):
     credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
     oauth = credentials.get("claudeAiOauth") or {}
@@ -905,47 +935,25 @@ def claude_limits(home, expected_fingerprint, opener=open_authenticated):
 
     if not oauth.get("accessToken"):
         raise IdentityBindingError("claude_credentials_missing")
-    request = urllib.request.Request(
-        "https://api.anthropic.com/api/oauth/usage",
-        headers={
-            "authorization": "Bearer " + oauth["accessToken"],
-            "anthropic-beta": "oauth-2025-04-20",
-            "anthropic-version": "2023-06-01",
-        },
-    )
     try:
-        response = opener(request, timeout=30)
+        response = opener(_usage_request(oauth["accessToken"]), timeout=30)
     except urllib.error.HTTPError as error:
         with error:
-            if error.code == 401:
-                if refresh_claude_token(home, opener=opener):
-                    credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
-                    oauth = credentials.get("claudeAiOauth") or {}
-                    if oauth.get("accessToken"):
-                        request = urllib.request.Request(
-                            "https://api.anthropic.com/api/oauth/usage",
-                            headers={
-                                "authorization": "Bearer " + oauth["accessToken"],
-                                "anthropic-beta": "oauth-2025-04-20",
-                                "anthropic-version": "2023-06-01",
-                            },
-                        )
-                        try:
-                            response = opener(request, timeout=30)
-                        except urllib.error.HTTPError as retry_error:
-                            with retry_error:
-                                if retry_error.code == 429:
-                                    raise ProviderThrottleError(
-                                        retry_after_epoch(retry_error.headers), provider_response=True
-                                    ) from retry_error
-                                raise
-                else:
-                    raise
-            elif error.code == 429:
-                raise ProviderThrottleError(
-                    retry_after_epoch(error.headers), provider_response=True
-                ) from error
-            else:
+            if error.code == 429:
+                raise _usage_throttle(error) from error
+            if error.code != 401 or not refresh_claude_token(home, opener=opener):
+                raise
+        # 401 -> refreshed: retry once with the rotated token
+        credentials = paths.load_json(os.path.join(home, ".credentials.json")) or {}
+        oauth = credentials.get("claudeAiOauth") or {}
+        if not oauth.get("accessToken"):
+            raise IdentityBindingError("claude_credentials_missing")
+        try:
+            response = opener(_usage_request(oauth["accessToken"]), timeout=30)
+        except urllib.error.HTTPError as retry_error:
+            with retry_error:
+                if retry_error.code == 429:
+                    raise _usage_throttle(retry_error) from retry_error
                 raise
     with response:
         response_org = response.headers.get("anthropic-organization-id")
@@ -1112,18 +1120,49 @@ def validate_required_windows(windows, provider=None):
 
 
 def empty_backoff():
-    return {"schema_version": 1, "providers": {}}
+    return {"schema_version": 1, "providers": {}, "accounts": {}}
+
+
+def _retry_at_after(entry, now):
+    retry_at = entry.get("retry_at", 0) if isinstance(entry, dict) else 0
+    if not isinstance(retry_at, (int, float)) or isinstance(retry_at, bool) \
+            or not math.isfinite(retry_at):
+        return 0
+    return int(retry_at) if retry_at > now else 0
 
 
 def active_backoff(document, provider, now):
     if not isinstance(document, dict):
         return 0
-    entry = (document.get("providers") or {}).get(provider) or {}
-    retry_at = entry.get("retry_at", 0)
-    if not isinstance(retry_at, (int, float)) or isinstance(retry_at, bool) \
-            or not math.isfinite(retry_at):
+    return _retry_at_after((document.get("providers") or {}).get(provider), now)
+
+
+def backoff_account_key(provider, name):
+    return f"{provider}:{name}"
+
+
+def active_account_backoff(document, provider, name, now):
+    if not isinstance(document, dict):
         return 0
-    return int(retry_at) if retry_at > now else 0
+    return _retry_at_after(
+        (document.get("accounts") or {}).get(backoff_account_key(provider, name)),
+        now)
+
+
+def prune_backoff(document, snapshot, now):
+    """Drop ledger entries that no longer bind: expired windows, slots that
+    read fine this run, slots gone from the registry, and the legacy
+    provider-wide Claude entry (Claude throttles are per account now)."""
+    providers = document.setdefault("providers", {})
+    providers.pop("anthropic_usage_api", None)
+    accounts = document.setdefault("accounts", {})
+    live = {backoff_account_key(row.get("provider"), row.get("name")): row
+            for row in (snapshot.get("accounts") or [])}
+    for key in list(accounts):
+        row = live.get(key)
+        if row is None or row.get("ok") or not _retry_at_after(accounts[key], now):
+            accounts.pop(key, None)
+    return document
 
 
 def apply_integrity(accounts):
@@ -1161,7 +1200,6 @@ def apply_integrity(accounts):
 def collect(accounts, backoff=None, persist_backoff=None):
     now = int(time.time())
     backoff = empty_backoff() if backoff is None else backoff
-    claude_backoff_until = active_backoff(backoff, "anthropic_usage_api", now)
     grok_backoff_until = active_backoff(backoff, "grok_billing_api", now)
     snapshot = {
         "schema_version": SCHEMA_VERSION,
@@ -1189,8 +1227,12 @@ def collect(accounts, backoff=None, persist_backoff=None):
                 if expected and identity["email"] \
                         and identity["email"].lower() != expected.lower():
                     raise IdentityBindingError("slot_bound_to_unexpected_email")
-                if claude_backoff_until > now:
-                    raise ProviderThrottleError(claude_backoff_until)
+                held_until = active_account_backoff(
+                    backoff, "claude", account["name"], now)
+                if held_until > now:
+                    # this slot's token is still inside its Retry-After;
+                    # re-hitting it would only extend the throttle
+                    raise ProviderThrottleError(held_until, scope="account")
                 result.update(claude_limits(account["home"],
                                             account.get("pinned_usage_org")))
                 # Recalculate digest in case token was refreshed during claude_limits
@@ -1285,20 +1327,29 @@ def collect(accounts, backoff=None, persist_backoff=None):
         except ProviderThrottleError as error:
             source = "grok_billing_api" if account["provider"] == "grok" \
                 else "anthropic_usage_api"
-            if source == "grok_billing_api":
-                grok_backoff_until = max(grok_backoff_until, error.retry_at)
+            if error.scope == "account":
+                # one slot's token is throttled; every sibling keeps reading
+                if error.provider_response and persist_backoff is not None:
+                    persist_backoff(
+                        error.retry_at, source=source,
+                        account=backoff_account_key(account["provider"],
+                                                    account["name"]))
+                result["note"] = ("usage source rate-limited this account's "
+                                  "token; held until its retry window "
+                                  "(other accounts unaffected)")
             else:
-                claude_backoff_until = max(claude_backoff_until, error.retry_at)
-            if error.provider_response and persist_backoff is not None:
-                try:
-                    persist_backoff(error.retry_at, source=source)
-                except TypeError:
-                    persist_backoff(error.retry_at)
+                if source == "grok_billing_api":
+                    grok_backoff_until = max(grok_backoff_until, error.retry_at)
+                if error.provider_response and persist_backoff is not None:
+                    try:
+                        persist_backoff(error.retry_at, source=source)
+                    except TypeError:
+                        persist_backoff(error.retry_at)
+                result["note"] = ("usage source temporarily rate-limited; "
+                                  "account held until provider retry window")
             result["ok"] = False
             result["error_code"] = "usage_source_rate_limited"
             result["retry_at"] = error.retry_at
-            result["note"] = ("usage source temporarily rate-limited; "
-                              "account held until provider retry window")
         except IdentityBindingError as error:
             result["ok"] = False
             result["error_code"] = error.code
@@ -1403,11 +1454,15 @@ def run_collect(quiet=False):
             return paths.load_json(paths.private_snapshot_path())
         backoff = paths.load_json(paths.backoff_path()) or empty_backoff()
 
-        def persist(retry_at, source="anthropic_usage_api"):
-            backoff.setdefault("providers", {})[source] = {
+        def persist(retry_at, source="anthropic_usage_api", account=None):
+            entry = {
                 "retry_at": int(retry_at),
                 "observed_at": min(int(time.time()), int(retry_at) - 1),
             }
+            if account:
+                backoff.setdefault("accounts", {})[account] = entry
+            else:
+                backoff.setdefault("providers", {})[source] = entry
             paths.write_json_atomic(paths.backoff_path(), backoff)
 
         snapshot = collect(registry.accounts(config), backoff, persist)
@@ -1420,12 +1475,10 @@ def run_collect(quiet=False):
                    for a in snapshot["accounts"]
                    if a.get("error_code") == "usage_source_rate_limited"}
         providers = backoff.setdefault("providers", {})
-        if any(a.get("provider") == "claude" and a.get("ok")
-               for a in snapshot["accounts"]) and "claude" not in limited:
-            providers.pop("anthropic_usage_api", None)
         if any(a.get("provider") == "grok" and a.get("ok")
                for a in snapshot["accounts"]) and "grok" not in limited:
             providers.pop("grok_billing_api", None)
+        prune_backoff(backoff, snapshot, int(time.time()))
         paths.write_json_atomic(paths.backoff_path(), backoff)
         paths.write_json_atomic(paths.private_snapshot_path(), snapshot)
         # reload settings fresh (not the config loaded at collect start) so a

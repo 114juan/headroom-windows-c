@@ -914,7 +914,7 @@ function accountState(account){
   if(isCodex&&/no .*telemetry|no rate_limits/i.test(account.note||""))
     return{cls:"idle",label:"Waiting",note:"run Codex once to start tracking"};
   if(code==="usage_source_rate_limited")
-    return{cls:"held",label:"Rate-limited",note:"provider throttled the usage feed · "
+    return{cls:"held",label:"Rate-limited",note:"provider throttled this account's usage feed · "
       +(Number.isFinite(account.retry_at)?untilReset(account.retry_at).replace("resets","retries"):"retries automatically")};
   if(code==="claude_local_binding_missing"||code==="claude_credentials_missing"
       ||code==="claude_refresh_expired"||code==="codex_auth_missing"

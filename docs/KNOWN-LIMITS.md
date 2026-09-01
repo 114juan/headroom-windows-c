@@ -15,6 +15,19 @@ unpinned — if an attacker controls your config home *before* first use, TOFU
 cannot detect it (they could also just take the credentials). Run
 `headroom collect` once right after connecting to close the window.
 
+## Anthropic throttles the usage feed per account, with up to 1h Retry-After
+
+`/api/oauth/usage` (the same read the Claude Code CLI makes for its own
+usage display) answers `429 rate_limit_error` per *token*, not per IP: on
+2026-09-01 one Max slot was throttled with `Retry-After: 571` while four
+sibling slots answered 200 in the same second. The throttle seems to be an
+hourly quota on that account: a slot that also runs live Claude Code sessions
+(which poll the same endpoint) trips it far sooner than headroom's 5-minute
+collect alone. headroom therefore holds only the throttled slot until its
+Retry-After (ledger key `accounts.<provider>:<name>` in
+`state/provider-backoff.json`) and keeps reading the others. A held slot shows
+**Rate-limited** on the dashboard and is not routable until the window ends.
+
 ## Codex reads need a Codex CLI with the app-server
 
 Codex usage is read live from `codex app-server`

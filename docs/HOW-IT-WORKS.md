@@ -103,7 +103,7 @@ picked on unproven capacity.
 | `~/.headroom/state/usage-private.json` | 0600 | full snapshot incl. identity fingerprints |
 | `~/.headroom/state/public/usage.json` | 0644 | sanitized dashboard feed |
 | `~/.headroom/state/cooldowns.json` | 0600 | active cooldowns |
-| `~/.headroom/state/provider-backoff.json` | 0600 | usage-endpoint 429 backoff |
+| `~/.headroom/state/provider-backoff.json` | 0600 | usage-endpoint 429 backoff (per Claude account; provider-wide for Grok) |
 
 ## Environment overrides
 
