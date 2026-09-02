@@ -82,16 +82,15 @@ def main():
         row = rows[current["name"]]
         windows = row.get("windows") or {}
         parts.append(f"{current['name']}")
-        if current.get("provider") != "grok":
-            parts.append(window_text(windows, "5h", "5h"))
-        parts.append(window_text(windows, "7d", "7d"))
-        probe = windows.get("7d") if current.get("provider") == "grok" \
-            else windows.get("5h")
+        provider = current.get("provider")
+        # only the windows this provider publishes, and its own primary gauge
+        for key in registry.required_windows(provider):
+            parts.append(window_text(windows, key, key))
+        probe = windows.get(registry.primary_window(provider))
         used = (probe or {}).get("used_percent")
         if used is not None and used >= 75:
             from . import route
-            fam = "grok" if current.get("provider") == "grok" else (
-                "codex" if current.get("provider") == "codex" else "claude")
+            fam = provider if provider in registry.PROVIDERS else "claude"
             candidate = next(
                 (account for account, reason in route.candidates(
                     fam, snapshot)

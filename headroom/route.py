@@ -133,11 +133,21 @@ def scoped_window_for(fam, windows):
 # and the router's freshness check already holds them).
 CODEX_ROUTING_ENABLED = os.environ.get("HEADROOM_CODEX_ROUTING", "1") != "0"
 
+# Antigravity is TRACKED, not routed. Its token lives in the OS keyring, which
+# is one store per desktop user, so headroom cannot hand a launch a different
+# AGY account than the one already signed in — rotating would be a lie. The
+# quota reading is still collected, charted and alerted on. Set
+# HEADROOM_AGY_ROUTING=1 once you run file-backed, per-slot AGY logins.
+AGY_ROUTING_ENABLED = os.environ.get("HEADROOM_AGY_ROUTING", "0") != "0"
+
 
 def block_reason(account, fam, snapshot_row, cool, now):
     """None when the account has proven headroom; otherwise why not."""
     if account.get("provider") == "codex" and not CODEX_ROUTING_ENABLED:
         return "Codex is dashboard-only in this release (best-effort tracking)"
+    if account.get("provider") == "agy" and not AGY_ROUTING_ENABLED:
+        return ("Antigravity is tracked, not routed (its login is machine-wide "
+                "— see HEADROOM_AGY_ROUTING)")
     if cool is None:
         return "cooldown ledger unreadable — inspect/delete state/cooldowns.json"
     if snapshot_row is None:
@@ -184,7 +194,7 @@ def block_reason(account, fam, snapshot_row, cool, now):
     windows = snapshot_row.get("windows")
     if not isinstance(windows, dict):
         return "windows invalid"
-    required = ("7d",) if account.get("provider") == "grok" else ("5h", "7d")
+    required = registry.required_windows(account.get("provider"))
     for key in required:
         window = windows.get(key)
         if not isinstance(window, dict):
@@ -315,12 +325,9 @@ def cmd_status(fam):
     chosen = None
     for account, reason in candidates(fam, snapshot):
         windows = (rows.get(account["name"]) or {}).get("windows") or {}
-        if account["provider"] == "grok":
-            head = "7d=%s" % collector.display_percent(windows.get("7d"))
-        else:
-            head = "5h=%s 7d=%s" % (
-                collector.display_percent(windows.get("5h")),
-                collector.display_percent(windows.get("7d")))
+        head = " ".join(
+            "%s=%s" % (key, collector.display_percent(windows.get(key)))
+            for key in registry.required_windows(account["provider"]))
         scoped = scoped_window_for(fam, windows)
         if scoped is not None:
             head += " %s=%s" % (fam, collector.display_percent(scoped))
@@ -367,10 +374,12 @@ def cmd_run(fam, command):
         if process.returncode != 0 and LIMIT_RE.search(process.stderr or ""):
             sys.stdout.write(process.stdout or "")
             sys.stderr.write(process.stderr or "")
-            if account["provider"] == "grok":
-                window_key = "7d"
+            primary = registry.primary_window(account["provider"])
+            if "7d" not in registry.required_windows(account["provider"]):
+                window_key = primary
             else:
-                window_key = "7d" if WEEKLY_RE.search(process.stderr or "") else "5h"
+                weekly = WEEKLY_RE.search(process.stderr or "")
+                window_key = "7d" if weekly else primary
             reset = window_reset(snapshot, account["name"], window_key) \
                 or time.time() + (7 * 86400 if window_key == "7d" else 5 * 3600)
             mark(account["name"], fam, reset, account_wide=True, window=window_key)
@@ -406,7 +415,10 @@ def cmd_exec(fam, command):
     # final recheck against the latest cooldown ledger right before exec, in
     # case another process cooled this account since pick(). NEVER fall back to
     # a held account — re-pick, and refuse to launch if nothing is eligible.
-    if registry.family_provider(fam) in ("claude", "grok") or CODEX_ROUTING_ENABLED:
+    provider = registry.family_provider(fam)
+    if provider in ("claude", "grok") or (provider == "codex"
+                                          and CODEX_ROUTING_ENABLED) \
+            or (provider == "agy" and AGY_ROUTING_ENABLED):
         snapshot = ensure_fresh_snapshot()
         row = _snapshot_accounts(snapshot).get(account["name"])
         if block_reason(account, fam, row, cooldowns(), time.time()):
@@ -433,7 +445,8 @@ def cmd_exec(fam, command):
             os.execvp(command[0], command)
     except FileNotFoundError:
         cli = {"claude": "Claude Code", "codex": "Codex",
-               "grok": "Grok Build"}.get(command[0], command[0])
+               "grok": "Grok Build",
+               "agy": "Google Antigravity"}.get(command[0], command[0])
         print(f"[headroom] `{command[0]}` not found on PATH — install the "
               f"{cli} CLI first", file=sys.stderr)
         return 127
@@ -580,14 +593,14 @@ def cmd_rotate(fam, launch=False):
         print(f"every account for '{fam}' is already limited or held")
         earliest = None
         for account, _ in ranked:
-            key = "7d" if account["provider"] == "grok" else "5h"
+            key = registry.primary_window(account["provider"])
             reset = window_reset(snapshot, account["name"], key)
             if _number(reset) and (earliest is None or reset < earliest):
                 earliest = reset
         if earliest:
             print(f"earliest reset: {tfmt(earliest)}")
         return 2
-    rotate_window = "7d" if current["provider"] == "grok" else "5h"
+    rotate_window = registry.primary_window(current["provider"])
     reset = window_reset(snapshot, current["name"], rotate_window) \
         or time.time() + (7 * 86400 if rotate_window == "7d" else 5 * 3600)
     reset = mark(current["name"], fam, reset, account_wide=True,

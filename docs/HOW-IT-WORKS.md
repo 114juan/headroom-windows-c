@@ -67,10 +67,18 @@ token holds the slot with `claude_refresh_expired` and tells you to run
 
 | window | provider | meaning |
 |---|---|---|
-| `5h` | Claude, Codex | rolling session window (Grok has none) |
-| `7d` | all | weekly all-models / SuperGrok weekly pool |
-| `scoped:<Model>` | Claude | weekly cap for a specific model tier (e.g. Opus) |
+| `5h` | Claude, Codex, Antigravity | rolling session window (Grok has none) |
+| `7d` | Claude, Codex, Grok | weekly all-models / SuperGrok weekly pool (Antigravity has none) |
+| `scoped:<Model>` | Claude, Antigravity | weekly cap for a model tier (e.g. Opus); every extra Antigravity quota bucket |
 | `scoped:Extra` | Grok | Extra Usage Credits, when an on-demand cap is present |
+
+A provider's genuinely absent windows live in `registry.OPTIONAL_WINDOWS`, so
+validation, the router, the statusline and `headroom status` all ask the same
+question rather than special-casing a provider name. A provider with an
+optional window must still land at least one real reading — a slot that
+reported nothing is held, never treated as wide open. Antigravity's session
+window carries the bucket's true length in `window_minutes` (Google names the
+window per bucket; it is 5-hourly today).
 
 The dashboard and router treat *remaining* capacity (100 − used) as the
 primary number. The router additionally honours provider `severity` flags and
@@ -103,11 +111,12 @@ picked on unproven capacity.
 | `~/.headroom/state/usage-private.json` | 0600 | full snapshot incl. identity fingerprints |
 | `~/.headroom/state/public/usage.json` | 0644 | sanitized dashboard feed |
 | `~/.headroom/state/cooldowns.json` | 0600 | active cooldowns |
-| `~/.headroom/state/provider-backoff.json` | 0600 | usage-endpoint 429 backoff (per Claude account; provider-wide for Grok) |
+| `~/.headroom/state/provider-backoff.json` | 0600 | usage-endpoint 429 backoff (per account for Claude and Antigravity; provider-wide for Grok) |
 
 ## Environment overrides
 
 Everything is overridable for testing or custom layouts: `HEADROOM_DIR`,
 `HEADROOM_SNAPSHOT_MAX_AGE`, `HEADROOM_OBSERVATION_MAX_AGE`,
 `HEADROOM_CLOCK_SKEW`, `HEADROOM_CODEX_STALE_AFTER`,
-`HEADROOM_IDENTITY_TIMEOUT`, `HEADROOM_SERVE_MAX_AGE`, `HEADROOM_BIN_DIR`.
+`HEADROOM_IDENTITY_TIMEOUT`, `HEADROOM_SERVE_MAX_AGE`, `HEADROOM_BIN_DIR`,
+`HEADROOM_CODEX_ROUTING`, `HEADROOM_AGY_ROUTING`.

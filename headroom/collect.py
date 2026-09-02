@@ -16,6 +16,13 @@ Grok: SuperGrok weekly pool from the Grok CLI-proxy billing feed
 ``$GROK_HOME/auth.json`` token. Identity is the OIDC user/team id bound in
 that file. No inference tokens spent.
 
+Antigravity (AGY): the Google account's Code Assist quota summary
+(``cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary``) plus
+``:loadCodeAssist`` for the plan, authenticated with the file-backed OAuth
+token inside that slot's home. Identity is the ``id_token`` subject (or the
+Google userinfo endpoint when the login stored no id_token). No inference
+tokens spent.
+
 Fail-closed rules:
   * an account with unverifiable identity or an out-of-range reading is HELD
     (ok=false) rather than guessed at;
@@ -45,6 +52,7 @@ import urllib.request
 import uuid
 from datetime import datetime, timezone
 
+from . import agy as agy_provider
 from . import grok as grok_provider
 from . import paths, registry
 
@@ -85,12 +93,24 @@ RECONNECT_CODES = frozenset({
     "grok_identity_email_missing",
     "grok_refresh_expired",
     "grok_team_usage_unsupported",
+    "agy_auth_missing",
+    "agy_identity_email_missing",
+    "agy_refresh_expired",
 })
 
 PUBLIC_FIELDS = {
     "name", "email", "provider", "plan", "ok", "note", "error_code", "retry_at",
     "captured_at", "source", "stale", "windows", "identity_verified",
     "identity_method", "trust_state", "routable", "subscription",
+}
+
+
+# Which usage feed a provider throttle belongs to, for the backoff ledger.
+THROTTLE_SOURCE = {
+    "claude": "anthropic_usage_api",
+    "codex": "openai_app_server",
+    "grok": "grok_billing_api",
+    "agy": "google_code_assist_api",
 }
 
 
@@ -151,6 +171,11 @@ AUTH_OVERRIDE_VARS = (
     # Grok / xAI — an API key in the parent env must not override a slot's
     # SuperGrok OAuth session.
     "XAI_API_KEY", "GROK_OAUTH_TOKEN",
+    # Google / Antigravity — an API key or a redirected Code Assist backend
+    # must not override the slot's Antigravity OAuth session.
+    "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_CLOUD_PROJECT", "GEMINI_BASE_URL", "CLOUD_CODE_URL",
+    "AGY_ADC_AUTH",
 )
 
 
@@ -234,6 +259,9 @@ def credential_digest(provider, home):
             _scope, entry = grok_provider.select_auth_entry(
                 paths.load_json(os.path.join(home, "auth.json")) or {})
             token = (entry or {}).get("key")
+        elif provider == "agy":
+            _path, creds = agy_credential_file(home)
+            token = agy_provider.access_token(creds)
         else:
             token = ((paths.load_json(os.path.join(home, "auth.json")) or {})
                      .get("tokens") or {}).get("access_token")
@@ -251,6 +279,8 @@ def local_binding(provider, home):
             fp = claude_local_identity(home)["account_fingerprint"]
         elif provider == "grok":
             fp = grok_identity(home)["account_fingerprint"]
+        elif provider == "agy":
+            fp = agy_local_identity(home)["account_fingerprint"]
         else:
             auth = paths.load_json(os.path.join(home, "auth.json")) or {}
             claims = decode_jwt_payload((auth.get("tokens") or {}).get("id_token"))
@@ -749,6 +779,249 @@ def grok_limits(home, expected_email=None, opener=None, now=None):
     return identity, identity["plan_type"], windows
 
 
+
+# --------------------------------------------------------------- antigravity
+
+def agy_credential_file(home):
+    """(path, credentials) for the file-backed Antigravity login in a slot.
+
+    ``agy`` prefers the OS keyring and only writes a token file where no
+    keyring is available, so a slot with none of the known files is HELD —
+    headroom never reads the machine-wide keyring, which could not be bound
+    to one slot anyway (see docs/KNOWN-LIMITS.md).
+    """
+    for relative in agy_provider.CREDENTIAL_FILES:
+        path = os.path.join(home, *relative.split("/"))
+        creds = agy_provider.select_credentials(paths.load_json(path))
+        if creds is not None:
+            return path, creds
+    raise IdentityBindingError("agy_auth_missing")
+
+
+def agy_local_identity(home):
+    """Identity bound in the slot from the local token only (no network)."""
+    _path, creds = agy_credential_file(home)
+    claims = {}
+    raw = agy_provider.id_token(creds)
+    if raw:
+        try:
+            claims = decode_jwt_payload(raw)
+        except ValueError:
+            claims = {}
+    email_address = claims.get("email") or creds.get("email")
+    if not isinstance(email_address, str) or not email_address:
+        raise IdentityBindingError("agy_identity_email_missing")
+    return {
+        "verified": False,
+        "email": email_address,
+        "account_fingerprint": fingerprint(claims.get("sub") or email_address),
+        "method": "agy_local_token",
+        "plan_type": None,
+        "credential_digest": credential_digest("agy", home),
+    }
+
+
+def _agy_headers(token):
+    return {
+        "authorization": "Bearer " + token,
+        "accept": "application/json",
+        "user-agent": "headroom",
+    }
+
+
+def _agy_post(url, token, body, opener, timeout):
+    """(status, payload). A status of None means the request never landed."""
+    headers = _agy_headers(token)
+    headers["content-type"] = "application/json"
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"), method="POST",
+        headers=headers)
+    try:
+        response = opener(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        with error:
+            return error.code, None
+    except (OSError, urllib.error.URLError):
+        return None, None
+    with response:
+        try:
+            return getattr(response, "status", 200), json.load(response)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return getattr(response, "status", 200), None
+
+
+def _agy_get(url, token, opener, timeout):
+    request = urllib.request.Request(url, headers=_agy_headers(token))
+    try:
+        response = opener(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        with error:
+            return error.code, None
+    except (OSError, urllib.error.URLError):
+        return None, None
+    with response:
+        try:
+            return getattr(response, "status", 200), json.load(response)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return getattr(response, "status", 200), None
+
+
+def agy_token_near_expiry(creds, now=None):
+    now = time.time() if now is None else now
+    expires = agy_provider.expiry_epoch(creds)
+    if expires is None:
+        return False
+    return expires < now + ACCESS_REFRESH_SKEW
+
+
+def refresh_agy_token(home, opener=None, now=None):
+    """Refresh the slot Google access token in place. Never spawns ``agy``.
+
+    Returns True when the credential file was rewritten. Raises
+    IdentityBindingError('agy_refresh_expired') when there is nothing left to
+    refresh with or the server rejects the grant; returns False on a transient
+    failure so a still-valid access token can be used.
+    """
+    path, creds = agy_credential_file(home)
+    refresh = agy_provider.refresh_token(creds)
+    client_id, client_secret = agy_provider.oauth_client(creds)
+    if not refresh or not client_id:
+        # no client recorded beside the token: only ``agy`` can renew it
+        raise IdentityBindingError("agy_refresh_expired")
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+        "client_id": client_id,
+    }
+    if client_secret:
+        form["client_secret"] = client_secret
+    opener = open_authenticated if opener is None else opener
+    request = urllib.request.Request(
+        agy_provider.TOKEN_URL,
+        data=urllib.parse.urlencode(form).encode("utf-8"), method="POST",
+        headers={
+            "content-type": "application/x-www-form-urlencoded",
+            "user-agent": "headroom",
+            "accept": "application/json",
+        },
+    )
+    try:
+        response = opener(request, timeout=15)
+    except urllib.error.HTTPError as error:
+        with error:
+            if error.code in (400, 401):
+                raise IdentityBindingError("agy_refresh_expired") from error
+            return False
+    except (OSError, urllib.error.URLError):
+        return False
+    with response:
+        try:
+            data = json.load(response)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return False
+    if not isinstance(data, dict) or not data.get("access_token"):
+        return False
+    now = time.time() if now is None else now
+    rewritten = dict(creds)
+    rewritten["access_token"] = data["access_token"]
+    if data.get("refresh_token"):
+        rewritten["refresh_token"] = data["refresh_token"]
+    if data.get("id_token"):
+        rewritten["id_token"] = data["id_token"]
+    ttl = data.get("expires_in")
+    if not isinstance(ttl, (int, float)) or isinstance(ttl, bool) or ttl <= 0:
+        ttl = 3600
+    # google-auth-library writes this field in MILLISECONDS; keep the file in
+    # the exact shape ``agy`` expects to read back
+    rewritten["expiry_date"] = int((now + int(ttl)) * 1000)
+    try:
+        paths.write_json_atomic(path, rewritten, mode=0o600)
+    except OSError as error:
+        raise IdentityBindingError("agy_refresh_expired") from error
+    return True
+
+
+def agy_read(token, opener):
+    """(load_status, load_payload, quota_status, quota_payload).
+
+    ``loadCodeAssist`` names the plan and the Cloud AI Companion project the
+    quota is billed against; the project is then passed to the quota summary
+    so an enterprise slot reads its own pool and not a personal one.
+    """
+    load_status, load_payload = _agy_post(
+        agy_provider.LOAD_CODE_ASSIST_URL, token,
+        {"metadata": {"ideType": "IDE_UNSPECIFIED",
+                      "platform": "PLATFORM_UNSPECIFIED",
+                      "pluginType": "GEMINI"}}, opener, 15)
+    body = {}
+    if load_status == 200 and isinstance(load_payload, dict):
+        project = agy_provider.companion_project(load_payload)
+        if project:
+            body["project"] = project
+    else:
+        load_payload = None
+    quota_status, quota_payload = _agy_post(
+        agy_provider.QUOTA_SUMMARY_URL, token, body, opener, 15)
+    return load_status, load_payload, quota_status, quota_payload
+
+
+def agy_limits(home, expected_email=None, opener=None, now=None):
+    """Live Antigravity quota summary + plan. No inference spent."""
+    now = int(time.time() if now is None else now)
+    opener = open_authenticated if opener is None else opener
+    _path, creds = agy_credential_file(home)
+    if agy_token_near_expiry(creds, now=now):
+        if refresh_agy_token(home, opener=opener, now=now):
+            _path, creds = agy_credential_file(home)
+    token = agy_provider.access_token(creds)
+    if not token:
+        raise IdentityBindingError("agy_auth_missing")
+    load_status, load_payload, status, payload = agy_read(token, opener)
+    if 401 in (status, load_status):
+        if refresh_agy_token(home, opener=opener, now=now):
+            _path, creds = agy_credential_file(home)
+            token = agy_provider.access_token(creds)
+            load_status, load_payload, status, payload = agy_read(token, opener)
+        else:
+            raise IdentityBindingError("agy_refresh_expired")
+    if status == 429:
+        # Code Assist throttles per user, so only this slot has to wait
+        raise ProviderThrottleError(now + 300, provider_response=True,
+                                    scope="account")
+    if status in (401, 403):
+        raise IdentityBindingError("agy_quota_forbidden")
+    if status != 200 or payload is None:
+        raise IdentityBindingError("agy_quota_unavailable")
+    windows = agy_provider.windows_from_quota(payload)
+    if windows is None:
+        raise ValueError("malformed antigravity quota payload")
+    try:
+        identity = agy_local_identity(home)
+    except IdentityBindingError as error:
+        if error.code != "agy_identity_email_missing":
+            raise
+        # the login stored no id_token: ask Google who this token belongs to
+        info_status, info = _agy_get(
+            agy_provider.USERINFO_URL, token, opener, 10)
+        if info_status != 200 or not isinstance(info, dict) \
+                or not info.get("email"):
+            raise
+        identity = {
+            "verified": True,
+            "email": info["email"],
+            "account_fingerprint": fingerprint(info.get("sub") or info["email"]),
+            "method": "agy_userinfo",
+            "plan_type": None,
+            "credential_digest": credential_digest("agy", home),
+        }
+    if expected_email and identity["email"].lower() != expected_email.lower():
+        raise IdentityBindingError("slot_bound_to_unexpected_email")
+    identity["verified"] = True
+    identity["method"] = "agy_code_assist_api"
+    identity["credential_digest"] = credential_digest("agy", home)
+    identity["plan_type"] = agy_provider.plan_label(load_payload) or "Antigravity"
+    return identity, identity["plan_type"], windows
+
 # ------------------------------------------------------------------ limits
 
 def limit_entry(limit, minutes):
@@ -1101,12 +1374,21 @@ def codex_limits(home, now=None):
 # ---------------------------------------------------------------- snapshot
 
 def validate_required_windows(windows, provider=None):
+    """Every standard window a provider does publish must be a real reading.
+
+    ``registry.OPTIONAL_WINDOWS`` names the ones a provider genuinely has not
+    got (Grok has no session window, Antigravity no weekly pool). A provider
+    with an optional window must still land at least one usable reading, so a
+    slot that reported nothing at all is held, never treated as wide open.
+    """
+    optional = set(registry.OPTIONAL_WINDOWS.get(provider, ()))
+    usable = 0
     for key in ("5h", "7d"):
         window = windows.get(key)
         if not isinstance(window, dict):
             raise ValueError(f"missing required {key} usage window")
         if window.get("freshness") == "not_applicable":
-            if provider == "grok" and key == "5h":
+            if key in optional:
                 continue
             raise ValueError(f"missing required {key} usage window")
         if window.get("used_percent") is None \
@@ -1117,6 +1399,9 @@ def validate_required_windows(windows, provider=None):
         percent = window["used_percent"]
         if not isinstance(percent, (int, float)) or not 0 <= percent <= 100:
             raise ValueError(f"invalid {key} usage percentage")
+        usable += 1
+    if optional and not usable:
+        raise ValueError("no usable usage window")
 
 
 def empty_backoff():
@@ -1273,6 +1558,36 @@ def collect(accounts, backoff=None, persist_backoff=None):
                 result["windows"] = windows
                 validate_required_windows(result["windows"], "grok")
                 result["ok"] = True
+            elif account["provider"] == "agy":
+                expected = account.get("expected_email")
+                held_until = active_account_backoff(
+                    backoff, "agy", account["name"], now)
+                if held_until > now:
+                    identity = agy_local_identity(account["home"])
+                    result["identity"] = identity
+                    result["identity_verified"] = identity["verified"]
+                    result["identity_method"] = identity["method"]
+                    result["email"] = identity["email"]
+                    result["plan"] = identity.get("plan_type") or "Antigravity"
+                    if expected and identity["email"].lower() != expected.lower():
+                        raise IdentityBindingError(
+                            "slot_bound_to_unexpected_email")
+                    raise ProviderThrottleError(held_until, scope="account")
+                identity, plan_type, windows = agy_limits(
+                    account["home"], expected, now=now)
+                result["identity"] = identity
+                result["identity_verified"] = identity["verified"]
+                result["identity_method"] = identity["method"]
+                result["email"] = identity["email"]
+                result["plan"] = plan_type or "Antigravity"
+                result["subscription"] = {"status": "unknown",
+                                          "source": "provider_not_exposed"}
+                result["source"] = "google_code_assist_api"
+                result["stale"] = False
+                result["captured_at"] = now
+                result["windows"] = windows
+                validate_required_windows(result["windows"], "agy")
+                result["ok"] = True
             elif account["provider"] == "codex":
                 expected = account.get("expected_email")
                 try:
@@ -1325,8 +1640,8 @@ def collect(accounts, backoff=None, persist_backoff=None):
             else:
                 raise IdentityBindingError("unknown_provider")
         except ProviderThrottleError as error:
-            source = "grok_billing_api" if account["provider"] == "grok" \
-                else "anthropic_usage_api"
+            source = THROTTLE_SOURCE.get(account["provider"],
+                                          "anthropic_usage_api")
             if error.scope == "account":
                 # one slot's token is throttled; every sibling keeps reading
                 if error.provider_response and persist_backoff is not None:
@@ -1400,6 +1715,22 @@ def binding_note(code, account, result=None):
                 f"feed yet — identity held")
     if code == "grok_billing_unavailable":
         return (f"Grok billing feed unreachable for slot '{name}' "
+                f"— retry `headroom collect` or {reconnect}")
+    if code == "agy_auth_missing":
+        return (f"no file-backed Antigravity login in slot '{name}'"
+                f"{expected_bit} — {reconnect} (agy keeps its token in the OS "
+                f"keyring unless the slot home holds oauth_creds.json)")
+    if code == "agy_identity_email_missing":
+        return (f"Antigravity token in slot '{name}' names no account "
+                f"— {reconnect}")
+    if code == "agy_refresh_expired":
+        return (f"Antigravity token expired for slot '{name}'{expected_bit} "
+                f"— {reconnect}")
+    if code == "agy_quota_forbidden":
+        return (f"Antigravity quota is not readable for slot '{name}' "
+                f"(token lacks the Code Assist scope) — {reconnect}")
+    if code == "agy_quota_unavailable":
+        return (f"Antigravity quota feed unreachable for slot '{name}' "
                 f"— retry `headroom collect` or {reconnect}")
     if code == "slot_bound_to_unexpected_email":
         got = ((result.get("identity") or {}).get("email")
@@ -1519,17 +1850,14 @@ def print_snapshot(snapshot):
             for key in windows if key.startswith("scoped:")
         )
         if account.get("ok"):
-            if account.get("provider") == "grok":
-                print("%-16s %-14s 7d=%-5s %s%s" % (
-                    account["name"], account.get("plan", ""),
-                    display_percent(windows.get("7d")),
-                    scoped, " STALE" if account.get("stale") else ""))
-            else:
-                print("%-16s %-14s 5h=%-5s 7d=%-5s %s%s" % (
-                    account["name"], account.get("plan", ""),
-                    display_percent(windows.get("5h")),
-                    display_percent(windows.get("7d")),
-                    scoped, " STALE" if account.get("stale") else ""))
+            # only the windows this provider actually publishes (Grok has no
+            # session window, Antigravity no weekly pool)
+            gauges = " ".join(
+                "%s=%-5s" % (key, display_percent(windows.get(key)))
+                for key in registry.required_windows(account.get("provider")))
+            print("%-16s %-14s %s %s%s" % (
+                account["name"], account.get("plan", ""), gauges,
+                scoped, " STALE" if account.get("stale") else ""))
         else:
             print("%-16s HELD: %s" % (
                 account["name"],

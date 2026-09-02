@@ -1150,6 +1150,325 @@ class GrokProvider(unittest.TestCase):
         self.assertEqual(registry.family_provider("grok"), "grok")
 
 
+class AgyProvider(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self.home = os.path.join(self.tmpdir, "slot")
+        os.makedirs(self.home)
+        self.now = time.time()
+        self._orig_binding = collect.local_binding
+        collect.local_binding = lambda provider, home: ("AAAA", "BBBB")
+
+    def tearDown(self):
+        import shutil
+        collect.local_binding = self._orig_binding
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _id_token(email="agy@example.test", sub="google-sub-1"):
+        import base64
+        import json as _json
+        payload = base64.urlsafe_b64encode(
+            _json.dumps({"email": email, "sub": sub}).encode()).decode().rstrip("=")
+        return "header." + payload + ".signature"
+
+    def _write_creds(self, relative="oauth_creds.json", **over):
+        from headroom import paths
+        creds = {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": self._id_token(),
+            "token_type": "Bearer",
+            "client_id": "client-1.apps.googleusercontent.com",
+            "client_secret": "secret-1",
+            "expiry_date": int((self.now + 3600) * 1000),
+        }
+        creds.update(over)
+        path = os.path.join(self.home, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        paths.write_json_atomic(path, creds, mode=0o600)
+        return path, creds
+
+    @staticmethod
+    def _quota(*buckets):
+        return {"groups": [{"displayName": "Gemini", "buckets": list(buckets)}]}
+
+    # ------------------------------------------------------------- parsing
+
+    def test_parse_window_minutes_shapes(self):
+        from headroom import agy as agy_provider
+        cases = {
+            "18000s": 300.0,          # protobuf Duration
+            "PT5H": 300.0,            # ISO-8601
+            "5h0m0s": 300.0,          # Go
+            "5 hours": 300.0,         # prose
+            "per day": 1440.0,
+            "weekly": 10080.0,
+            "P7D": 10080.0,
+            "30m": 30.0,
+        }
+        for text, minutes in cases.items():
+            self.assertAlmostEqual(
+                agy_provider.parse_window_minutes(text), minutes,
+                msg="window %r" % text)
+        for junk in (None, "", "  ", "whenever", {}, True):
+            self.assertIsNone(agy_provider.parse_window_minutes(junk),
+                              msg="window %r" % (junk,))
+
+    def test_bucket_percent_needs_a_fraction(self):
+        from headroom import agy as agy_provider
+        self.assertEqual(
+            agy_provider.bucket_used_percent({"remainingFraction": 0.25}), 75.0)
+        self.assertEqual(
+            agy_provider.bucket_used_percent({"remainingFraction": 0}), 100.0)
+        # an amount has no denominator, so it can never become a percentage
+        self.assertIsNone(
+            agy_provider.bucket_used_percent({"remainingAmount": 42}))
+        self.assertIsNone(agy_provider.bucket_used_percent({}))
+        self.assertIsNone(
+            agy_provider.bucket_used_percent({"remainingFraction": "0.5"}))
+
+    def test_windows_map_shortest_to_session_and_rest_to_scoped(self):
+        from headroom import agy as agy_provider
+        windows = agy_provider.windows_from_quota(self._quota(
+            {"bucketId": "pro", "displayName": "Gemini 3 Pro", "window": "PT5H",
+             "remainingFraction": 0.4, "resetTime": "2026-09-02T18:00:00Z"},
+            {"bucketId": "flash", "displayName": "Flash", "window": "P1D",
+             "remainingFraction": 0.9},
+            {"bucketId": "off", "displayName": "Disabled", "window": "PT5H",
+             "remainingFraction": 0.1, "disabled": True},
+        ))
+        self.assertEqual(windows["5h"]["used_percent"], 60.0)
+        self.assertEqual(windows["5h"]["window_minutes"], 300)
+        self.assertEqual(windows["5h"]["resets_at"], "2026-09-02T18:00:00Z")
+        self.assertEqual(windows["7d"]["freshness"], "not_applicable")
+        self.assertEqual(windows["scoped:Gemini Flash"]["used_percent"], 10.0)
+        self.assertNotIn("scoped:Gemini Disabled", windows)
+
+    def test_windows_pick_longest_weekly(self):
+        from headroom import agy as agy_provider
+        windows = agy_provider.windows_from_quota(self._quota(
+            {"displayName": "Weekly", "window": "P7D", "remainingFraction": 0.5},
+            {"displayName": "Session", "window": "PT5H", "remainingFraction": 0.8},
+        ))
+        self.assertEqual(windows["7d"]["used_percent"], 50.0)
+        self.assertEqual(windows["5h"]["used_percent"], 20.0)
+        collect.validate_required_windows(windows, "agy")
+
+    def test_windows_none_when_nothing_usable(self):
+        from headroom import agy as agy_provider
+        self.assertIsNone(agy_provider.windows_from_quota({}))
+        self.assertIsNone(agy_provider.windows_from_quota(self._quota(
+            {"displayName": "Amounts only", "window": "PT5H",
+             "remainingAmount": 7})))
+
+    def test_plan_label_prefers_server_name(self):
+        from headroom import agy as agy_provider
+        self.assertEqual(
+            agy_provider.plan_label({"currentTier": {"id": "standard-tier",
+                                                     "name": "Antigravity Ultra"}}),
+            "Antigravity Ultra")
+        self.assertEqual(
+            agy_provider.plan_label({"currentTier": {"id": "free-tier"}}),
+            "Antigravity Free")
+        self.assertIsNone(agy_provider.plan_label({}))
+
+    # ------------------------------------------------------------ identity
+
+    def test_credentials_found_in_nested_home(self):
+        self._write_creds(relative=".gemini/antigravity-cli/oauth_creds.json")
+        path, creds = collect.agy_credential_file(self.home)
+        self.assertTrue(path.endswith("oauth_creds.json"))
+        self.assertEqual(creds["access_token"], "access-token")
+
+    def test_missing_credentials_hold_the_slot(self):
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.agy_credential_file(self.home)
+        self.assertEqual(ctx.exception.code, "agy_auth_missing")
+
+    def test_partial_credential_file_is_not_a_login(self):
+        from headroom import paths
+        paths.write_json_atomic(
+            os.path.join(self.home, "oauth_creds.json"),
+            {"refresh_token": "only-refresh"}, mode=0o600)
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.agy_credential_file(self.home)
+        self.assertEqual(ctx.exception.code, "agy_auth_missing")
+
+    def test_identity_from_id_token(self):
+        self._write_creds()
+        identity = collect.agy_local_identity(self.home)
+        self.assertEqual(identity["email"], "agy@example.test")
+        self.assertEqual(identity["method"], "agy_local_token")
+        self.assertTrue(identity["account_fingerprint"])
+        self.assertTrue(identity["credential_digest"])
+
+    # -------------------------------------------------------------- limits
+
+    def test_limits_reads_quota_and_plan(self):
+        self._write_creds()
+        opener = _ScriptedOpener([
+            (200, {"currentTier": {"id": "standard-tier", "name": "Antigravity Pro"},
+                   "cloudaicompanionProject": "proj-1"}),
+            (200, self._quota(
+                {"displayName": "Gemini 3 Pro", "window": "PT5H",
+                 "remainingFraction": 0.75,
+                 "resetTime": "2026-09-02T18:00:00Z"})),
+        ])
+        identity, plan, windows = collect.agy_limits(
+            self.home, now=self.now, opener=opener)
+        self.assertEqual(plan, "Antigravity Pro")
+        self.assertEqual(windows["5h"]["used_percent"], 25.0)
+        self.assertEqual(windows["7d"]["freshness"], "not_applicable")
+        self.assertTrue(identity["verified"])
+        self.assertEqual(identity["method"], "agy_code_assist_api")
+        collect.validate_required_windows(windows, "agy")
+        self.assertIn("retrieveUserQuotaSummary", opener.calls[1])
+
+    def test_limits_hold_on_wrong_email(self):
+        self._write_creds()
+        opener = _ScriptedOpener([
+            (200, {"currentTier": {"id": "free-tier"}}),
+            (200, self._quota({"displayName": "Pro", "window": "PT5H",
+                               "remainingFraction": 0.5})),
+        ])
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.agy_limits(self.home, "someone.else@example.test",
+                               opener=opener, now=self.now)
+        self.assertEqual(ctx.exception.code, "slot_bound_to_unexpected_email")
+
+    def test_limits_429_throttles_only_this_account(self):
+        self._write_creds()
+        opener = _ScriptedOpener([
+            (200, {"currentTier": {"id": "free-tier"}}),
+            (429, {"error": "RESOURCE_EXHAUSTED"}),
+        ])
+        with self.assertRaises(collect.ProviderThrottleError) as ctx:
+            collect.agy_limits(self.home, opener=opener, now=self.now)
+        self.assertEqual(ctx.exception.scope, "account")
+        self.assertTrue(ctx.exception.provider_response)
+
+    def test_limits_hold_when_quota_feed_is_down(self):
+        self._write_creds()
+        opener = _ScriptedOpener([
+            (200, {"currentTier": {"id": "free-tier"}}),
+            (500, {"error": "boom"}),
+        ])
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.agy_limits(self.home, opener=opener, now=self.now)
+        self.assertEqual(ctx.exception.code, "agy_quota_unavailable")
+
+    def test_refresh_rewrites_token_in_place(self):
+        path, _ = self._write_creds(expiry_date=int((self.now - 60) * 1000))
+        opener = _ScriptedOpener([
+            (200, {"access_token": "new-access", "expires_in": 3600,
+                   "refresh_token": "new-refresh"}),
+        ])
+        self.assertTrue(collect.refresh_agy_token(
+            self.home, opener=opener, now=self.now))
+        from headroom import paths
+        creds = paths.load_json(path)
+        self.assertEqual(creds["access_token"], "new-access")
+        self.assertEqual(creds["refresh_token"], "new-refresh")
+        # google-auth-library keeps this field in milliseconds
+        self.assertAlmostEqual(creds["expiry_date"] / 1000.0,
+                               self.now + 3600, delta=2)
+
+    def test_refresh_without_a_client_is_terminal(self):
+        self._write_creds(expiry_date=int((self.now - 60) * 1000),
+                          client_id=None, client_secret=None)
+        with self.assertRaises(collect.IdentityBindingError) as ctx:
+            collect.refresh_agy_token(self.home, opener=_ScriptedOpener([]),
+                                      now=self.now)
+        self.assertEqual(ctx.exception.code, "agy_refresh_expired")
+
+    # ------------------------------------------------------- wiring/policy
+
+    def test_validation_needs_at_least_one_real_window(self):
+        from headroom import agy as agy_provider
+        windows = {"5h": agy_provider.na_window(300),
+                   "7d": agy_provider.na_window(10080)}
+        with self.assertRaises(ValueError):
+            collect.validate_required_windows(windows, "agy")
+
+    def test_registry_wiring(self):
+        self.assertEqual(registry.family("gemini-3-pro"), "agy")
+        self.assertEqual(registry.family("antigravity"), "agy")
+        self.assertEqual(registry.family_provider("agy"), "agy")
+        self.assertEqual(registry.required_windows("agy"), ("5h",))
+        self.assertEqual(registry.required_windows("grok"), ("7d",))
+        self.assertEqual(registry.required_windows("claude"), ("5h", "7d"))
+        self.assertEqual(registry.primary_window("agy"), "5h")
+        self.assertEqual(registry.primary_window("grok"), "7d")
+        cfg = {"schema_version": 1, "accounts": [
+            {"name": "a1", "provider": "agy", "home": self.home}]}
+        self.assertEqual(registry.validate(cfg), cfg)
+
+    def test_router_tracks_but_does_not_route(self):
+        account = {"name": "a1", "provider": "agy", "home": self.home}
+        row = {
+            "name": "a1", "ok": True, "routable": True,
+            "trust_state": "verified", "stale": False,
+            "captured_at": self.now,
+            "identity": {"account_fingerprint": "AAAA",
+                         "credential_digest": "BBBB"},
+            "windows": {
+                "5h": {"used_percent": 20.0},
+                "7d": {"used_percent": None, "freshness": "not_applicable"},
+            },
+        }
+        self.assertIn("tracked",
+                      route.block_reason(account, "agy", row, {}, self.now))
+        orig = route.AGY_ROUTING_ENABLED
+        route.AGY_ROUTING_ENABLED = True
+        try:
+            self.assertIsNone(
+                route.block_reason(account, "agy", row, {}, self.now))
+            row["windows"]["5h"]["used_percent"] = 100.0
+            self.assertIn("5h", route.block_reason(
+                account, "agy", row, {}, self.now))
+        finally:
+            route.AGY_ROUTING_ENABLED = orig
+
+    def test_collect_reports_the_account(self):
+        self._write_creds()
+        calls = []
+
+        def fake_limits(home, expected=None, now=None):
+            calls.append(home)
+            return ({"verified": True, "email": "agy@example.test",
+                     "account_fingerprint": "FP", "method": "agy_code_assist_api",
+                     "credential_digest": "DG"},
+                    "Antigravity Pro",
+                    {"5h": {"used_percent": 30.0, "resets_at": None,
+                            "window_minutes": 300, "freshness": "fresh"},
+                     "7d": {"used_percent": None, "resets_at": None,
+                            "window_minutes": 10080,
+                            "freshness": "not_applicable"}})
+
+        orig = collect.agy_limits
+        collect.agy_limits = fake_limits
+        try:
+            snapshot = collect.collect([{"name": "a1", "provider": "agy",
+                                         "home": self.home}])
+        finally:
+            collect.agy_limits = orig
+        row = snapshot["accounts"][0]
+        self.assertTrue(row["ok"], row.get("note") or row.get("error"))
+        self.assertEqual(row["plan"], "Antigravity Pro")
+        self.assertEqual(row["source"], "google_code_assist_api")
+        self.assertEqual(row["trust_state"], "verified")
+        self.assertEqual(calls, [self.home])
+
+    def test_auth_override_vars_cover_google(self):
+        for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "CLOUD_CODE_URL"):
+            self.assertIn(var, collect.AUTH_OVERRIDE_VARS)
+        env = collect.scrubbed_env({"GEMINI_API_KEY": "x", "PATH": "/bin"})
+        self.assertNotIn("GEMINI_API_KEY", env)
+        self.assertEqual(env["PATH"], "/bin")
+
+
 if __name__ == "__main__":
     unittest.main()
 

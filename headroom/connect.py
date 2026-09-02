@@ -3,7 +3,8 @@
 Two paths:
 
 * ``adopt``   — register a login that already exists on this machine
-                (your current ``~/.claude``, ``~/.codex``, or ``~/.grok``).
+                (your current ``~/.claude``, ``~/.codex``, ``~/.grok``, or
+                the home holding Antigravity's ``.gemini``).
                 Zero friction: headroom just reads it, it never moves or
                 copies credentials.
 * ``fresh``   — create an isolated config home under ``~/.headroom/homes/``
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import time
 
+from . import agy as agy_provider
 from . import collect as collector
 from . import paths, registry
 
@@ -28,12 +30,16 @@ CREDENTIAL_FILES = {
     "claude": [".credentials.json", ".claude.json"],
     "codex": ["auth.json"],
     "grok": ["auth.json"],
+    # Antigravity writes wherever the login found a home; back up every place
+    # collect is willing to read one from.
+    "agy": [path.replace("/", os.sep) for path in agy_provider.CREDENTIAL_FILES],
 }
 DEFAULT_HOMES = dict(registry.DEFAULT_HOMES)
 
 
 def provider_binary(provider):
-    binary = {"claude": "claude", "codex": "codex", "grok": "grok"}.get(provider)
+    binary = {"claude": "claude", "codex": "codex", "grok": "grok",
+              "agy": "agy"}.get(provider)
     return shutil.which(binary) if binary else None
 
 
@@ -48,6 +54,8 @@ def slot_identity(provider, home):
             identity = collector.claude_identity(home)
         elif provider == "grok":
             identity = collector.grok_identity(home)
+        elif provider == "agy":
+            identity = collector.agy_local_identity(home)
         else:
             identity = collector.codex_identity(home)
         return identity
@@ -81,7 +89,10 @@ def backup_credentials(home, provider):
         if os.path.exists(source):
             os.makedirs(directory, mode=0o700, exist_ok=True)
             os.chmod(os.path.dirname(directory), 0o700)
-            shutil.copy2(source, os.path.join(directory, filename))
+            target = os.path.join(directory, filename)
+            # a provider credential can sit in a subdirectory of the home
+            os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+            shutil.copy2(source, target)
             saved.append(filename)
     return directory if saved else None, saved
 
@@ -95,6 +106,7 @@ def restore_credentials(home, provider, backup_dir, saved):
     for filename in CREDENTIAL_FILES[provider]:
         target = os.path.join(home, filename)
         if filename in saved:
+            os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
             shutil.copy2(os.path.join(backup_dir, filename), target)
         elif os.path.exists(target):
             os.remove(target)
@@ -160,6 +172,18 @@ def add_account(config, name, provider, home, expected_email=None):
 
 def connect_fresh(config, name, provider, quiet=False):
     """Isolated home + interactive provider login + verify + rollback."""
+    if provider == "agy":
+        # ``agy`` has no headless login subcommand and stores its token in the
+        # machine-wide OS keyring, so an isolated home cannot hold a second
+        # Antigravity account. Adopt the login that is already signed in.
+        print("Antigravity has no isolated login: `agy` signs in through the "
+              "OS keyring, one account per desktop user.\n"
+              "Sign in with the Antigravity IDE or `agy`, then adopt it:\n"
+              f"  headroom connect {name} --provider agy --adopt ~\n"
+              "headroom reads a file-backed token "
+              "(<home>/oauth_creds.json or <home>/.gemini/oauth_creds.json); "
+              "see docs/KNOWN-LIMITS.md.", file=sys.stderr)
+        return None
     binary = provider_binary(provider)
     if not binary:
         print(f"cannot find the `{provider}` CLI on PATH — install it first",
@@ -254,7 +278,7 @@ def connect_adopt(config, name, provider, home, quiet=False):
 
 
 def cmd_connect(args):
-    """CLI: `headroom connect [name] [--provider claude|codex|grok] [--adopt PATH]`."""
+    """CLI: `headroom connect [name] [--provider claude|codex|grok|agy] [--adopt PATH]`."""
     try:
         config = registry.load()
     except registry.RegistryError:

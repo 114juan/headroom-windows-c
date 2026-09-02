@@ -1,10 +1,10 @@
 # headroom
 
-**Never hit a Claude, Codex, or Grok usage limit mid-flight again.**
+**Never hit a Claude, Codex, Grok or Antigravity usage limit mid-flight again.**
 
-headroom tracks the remaining capacity of every Claude, ChatGPT/Codex, and
-Grok Build (SuperGrok) subscription you own — *without spending a single
-token* — puts it on a live dashboard you'll actually want to look at, and
+headroom tracks the remaining capacity of every Claude, ChatGPT/Codex,
+Grok Build (SuperGrok) and Google Antigravity (AGY) subscription you own —
+*without spending a single token* — puts it on a live dashboard you'll actually want to look at, and
 rotates your tools to the next account with headroom the moment one hits a
 limit.
 
@@ -47,7 +47,7 @@ headroom fixes all three problems:
 
 ## Quickstart
 
-Requirements: Python 3.9+ (stdlib only — no pip installs except graphifyy), macOS, Linux, or Windows, and the `claude`, `codex`, and/or `grok` CLIs you already use. (On macOS, connect Claude accounts with a fresh `headroom connect` login rather than adopting the Keychain-backed default — see [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).)
+Requirements: Python 3.9+ (stdlib only — no pip installs except graphifyy), macOS, Linux, or Windows, and the `claude`, `codex`, `grok` and/or `agy` CLIs you already use. (On macOS, connect Claude accounts with a fresh `headroom connect` login rather than adopting the Keychain-backed default — see [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).)
 
 **On macOS/Linux:**
 ```bash
@@ -133,9 +133,22 @@ headroom rotate            # limit hit? cool this login, switch to the next
   use the weekly pool. Near-expiry tokens are refreshed over `auth.x.ai`
   without spawning `grok` and without spending inference. Isolated slots use
   `GROK_HOME`, same idea as `CLAUDE_CONFIG_DIR`.
+- **Antigravity (AGY) — real-time, tracked not routed.** A Google account's
+  Antigravity spend is read from the Cloud Code companion backend the IDE and
+  the `agy` CLI already talk to:
+  `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` for the
+  rolling quota buckets, plus `:loadCodeAssist` for the plan tier. Each
+  bucket's `remainingFraction` becomes a window — the shortest becomes the
+  session gauge, keeping its true length in `window_minutes`, and the rest are
+  published as `scoped:<Model>`. Identity is the `id_token` subject bound in
+  the slot. Antigravity is **tracked, not rotated**: `agy` keeps its token in
+  the OS keyring, which is one store per desktop user, so headroom cannot
+  hand a launch a different Google account than the one already signed in.
+  See [docs/KNOWN-LIMITS.md](docs/KNOWN-LIMITS.md).
 
-Every account is optional — run only Claude, only Codex, only Grok, or mix
-them. All three providers are read live, identity-bound, and fully routed.
+Every account is optional — run only Claude, only Codex, only Grok, only
+Antigravity, or mix them. Every provider is read live and identity-bound;
+Claude, Codex and Grok are fully routed, Antigravity is tracked.
 - Snapshots are written atomically. The dashboard gets a sanitized projection
   (optionally with emails redacted) — raw identity material stays in the
   private state directory with `0600` permissions.

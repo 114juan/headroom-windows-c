@@ -100,6 +100,69 @@ Grok has no 5-hour session window. Routing and rotation use the weekly
 pool only. Isolated slots are `GROK_HOME` directories; `grok login` writes
 `auth.json` there.
 
+## Antigravity is tracked, not rotated (its login is machine-wide)
+
+Google Antigravity spend is read from the Cloud Code companion backend that
+the Antigravity IDE and the `agy` CLI already use:
+
+```
+POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
+POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+```
+
+Google does not publish these as a third-party API. If the response changes
+shape, headroom holds the slot (`agy_quota_unavailable`) instead of guessing,
+and a bucket that carries a `remainingAmount` without a denominator is
+dropped rather than turned into an invented percentage.
+
+**Two limits worth knowing before you set an AGY slot up.**
+
+**1. `agy` stores its token in the OS keyring, not in a file.** headroom only
+ever reads file-backed tokens, and it reads them from the slot's own home so
+one slot can never report another account's headroom. A machine-wide keyring
+has neither property: it holds exactly one Antigravity login per desktop
+user, and nothing binds that entry to a slot. So a slot with no
+`oauth_creds.json` is held with `agy_auth_missing`. headroom looks in, most
+specific first:
+
+```
+<home>/oauth_creds.json
+<home>/.gemini/oauth_creds.json
+<home>/.gemini/antigravity-cli/oauth_creds.json
+<home>/.gemini/antigravity/oauth_creds.json
+```
+
+The file is the standard google-auth-library shape (`access_token`,
+`refresh_token`, `id_token`, `expiry_date` in **milliseconds**). headroom
+refreshes it only with the `client_id`/`client_secret` the login itself wrote
+next to the token — it embeds no Google OAuth client of its own, so it can
+extend a grant you already made but never mint a new one. Without those
+fields an expired token is terminal (`agy_refresh_expired`) and only `agy`
+can renew it.
+
+**2. There is no isolated AGY login.** `agy` has no headless login subcommand
+and signs in through that same machine-wide keyring, so
+`headroom connect <name> --provider agy` refuses the fresh-login path and
+points you at adoption instead:
+
+```
+headroom connect antigravity --provider agy --adopt ~
+```
+
+Because a launch cannot be handed a different Google account than the one
+already signed in, rotating AGY would be a lie — so the router holds every
+AGY slot with *"Antigravity is tracked, not routed"*. The reading is still
+collected, charted, alerted on and kept in history. If you do run per-slot,
+file-backed AGY logins, set `HEADROOM_AGY_ROUTING=1` to route them like any
+other provider.
+
+**Windows.** Antigravity meters rolling per-model buckets and publishes no
+fleet-wide weekly pool, so `7d` is `not_applicable` and `5h` carries the
+shortest bucket — with its real length in `window_minutes`, since Google names
+the window per bucket. Every other bucket is published as `scoped:<Model>`.
+Code Assist throttles per user, so a 429 holds only that slot
+(`usage_source_rate_limited`), never the whole fleet.
+
 ## File-based credentials required (macOS Keychain caveat)
 
 headroom reads usage tokens from files (`.credentials.json`, `auth.json`).

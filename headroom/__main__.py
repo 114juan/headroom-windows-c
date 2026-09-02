@@ -1,9 +1,9 @@
 """headroom — usage tracking, live dashboard, and account rotation
-for Claude Code, Codex, and Grok Build subscriptions.
+for Claude Code, Codex, Grok Build and Google Antigravity subscriptions.
 
 usage:
   headroom setup                    first-run wizard (accounts + dashboard style)
-  headroom connect [name] [--provider claude|codex|grok] [--adopt PATH]
+  headroom connect [name] [--provider claude|codex|grok|agy] [--adopt PATH]
                                     add an account, or re-login an existing slot
   headroom reconnect <name>         re-login an existing slot (same as connect)
   headroom collect                  read usage for every account (no tokens spent)
@@ -65,7 +65,12 @@ def main(argv=None):
 def _slot_has_creds(account):
     import os
     home = account.get("home") or ""
-    filename = ".credentials.json" if account.get("provider") == "claude" \
+    provider = account.get("provider")
+    if provider == "agy":
+        from . import agy as agy_provider
+        return any(os.path.isfile(os.path.join(home, *rel.split("/")))
+                   for rel in agy_provider.CREDENTIAL_FILES)
+    filename = ".credentials.json" if provider == "claude" \
         else "auth.json"  # Codex and Grok both store tokens in auth.json
     return os.path.isfile(os.path.join(home, filename))
 
@@ -355,7 +360,7 @@ def _dispatch(argv):
             print(f"HEADROOM_DIR {paths.base_dir()}")
         except ValueError as error:
             print(f"HEADROOM_DIR INVALID: {error}")
-        for cli in ("claude", "codex", "grok"):
+        for cli in ("claude", "codex", "grok", "agy"):
             found = shutil.which(cli)
             print(f"{cli:<10} {found or 'not found on PATH'}")
         try:

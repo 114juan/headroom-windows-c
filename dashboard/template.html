@@ -753,11 +753,12 @@ function windowLabel(key){
   return key;
 }
 function windowColumns(accounts){
-  const keys=["5h","7d"];
-  if(accounts.length&&accounts.every(a=>{
-    const w=(a.windows||{})["5h"];
+  /* drop a standard window this whole provider group never publishes:
+     Grok has no 5h session window, Antigravity no 7d weekly pool */
+  const keys=["5h","7d"].filter(key=>!(accounts.length&&accounts.every(a=>{
+    const w=(a.windows||{})[key];
     return w&&w.freshness==="not_applicable";
-  }))keys.splice(keys.indexOf("5h"),1);
+  })));
   accounts.forEach(a=>Object.keys(a.windows||{}).forEach(k=>{
     if(k.startsWith("scoped:")&&!keys.includes(k))keys.push(k);}));
   return keys;
@@ -929,7 +930,9 @@ function needsLogin(account){
           "claude_refresh_expired","codex_auth_missing",
           "codex_identity_email_missing","codex_reauth_required",
           "grok_auth_missing","grok_identity_email_missing",
-          "grok_refresh_expired","slot_bound_to_unexpected_email"]
+          "grok_refresh_expired","agy_auth_missing",
+          "agy_identity_email_missing","agy_refresh_expired",
+          "agy_quota_forbidden","slot_bound_to_unexpected_email"]
           .indexOf(account.error_code||"")>=0;
 }
 function accountActions(account,totalAccounts){
@@ -963,7 +966,7 @@ function accountMarkup(account,columns,totalAccounts){
 function providerMarkup(provider,accounts,totalAccounts){
   if(!accounts.length)return"";
   const columns=windowColumns(accounts);
-  const title=provider==="claude"?"Claude":provider==="grok"?"Grok":"Codex";
+  const title={claude:"Claude",grok:"Grok",agy:"Antigravity",codex:"Codex"}[provider]||provider;
   const sub="real-time";
   return '<section class="provider"><header class="provider-head">'+
     '<h2 class="provider-name">'+title+'</h2><span class="provider-count">'+
@@ -994,6 +997,7 @@ function render(data){
   const claude=accounts.filter(a=>a.provider==="claude");
   const codex=accounts.filter(a=>a.provider==="codex");
   const grok=accounts.filter(a=>a.provider==="grok");
+  const agy=accounts.filter(a=>a.provider==="agy");
   set("verified",current.length+"/"+accounts.length);
   set("average",avg==null?"n/a":avg+"%");
   set("lowest",lowest?Math.round(lowest.left)+"%":"n/a");
@@ -1003,6 +1007,7 @@ function render(data){
   if(claude.length)noteBits.push("Claude "+claude.length);
   if(codex.length)noteBits.push("Codex "+codex.length);
   if(grok.length)noteBits.push("Grok "+grok.length);
+  if(agy.length)noteBits.push("Antigravity "+agy.length);
   set("account-note",noteBits.join(" · "));
   /* top-bar instruments */
   document.getElementById("verified-viz").innerHTML=accounts.map(a=>
@@ -1021,7 +1026,8 @@ function render(data){
   set("source-line",current.length+" of "+accounts.length+" verified");
   document.getElementById("providers").innerHTML=
     providerMarkup("claude",claude,accounts.length)+providerMarkup("codex",codex,accounts.length)+
-    providerMarkup("grok",grok,accounts.length);
+    providerMarkup("grok",grok,accounts.length)+
+    providerMarkup("agy",agy,accounts.length);
   const warnings=(data.integrity_warnings||[]).slice();
   if(snapStale)warnings.unshift("snapshot is over 30 minutes old — readings shown as held until a fresh collect");
   const throttled=accounts.filter(a=>a.error_code==="usage_source_rate_limited");

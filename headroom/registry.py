@@ -26,17 +26,28 @@ import re
 
 from . import paths
 
-PROVIDERS = ("claude", "codex", "grok")
+PROVIDERS = ("claude", "codex", "grok", "agy")
+# Antigravity has no config-home variable of its own: ``agy`` derives
+# ``~/.gemini`` from the user home, so an isolated AGY slot is an isolated
+# user home. Everything else takes the CLI's documented override.
+AGY_HOME_ENV = "USERPROFILE" if os.name == "nt" else "HOME"
 HOME_ENV = {
     "claude": "CLAUDE_CONFIG_DIR",
     "codex": "CODEX_HOME",
     "grok": "GROK_HOME",
+    "agy": AGY_HOME_ENV,
 }
 DEFAULT_HOMES = {
     "claude": "~/.claude",
     "codex": "~/.codex",
     "grok": "~/.grok",
+    "agy": "~",
 }
+
+# Windows a provider genuinely does not publish, so validation and routing
+# must not demand them: Grok has no 5-hour session window, and Antigravity
+# meters rolling model buckets with no fleet-wide weekly pool.
+OPTIONAL_WINDOWS = {"grok": ("5h",), "agy": ("7d",)}
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 DEFAULT_DASHBOARD = {
     "theme": "midnight",
@@ -56,6 +67,9 @@ FAMILY_PROVIDER = {
     "codex": "codex",
     "gpt": "codex",
     "grok": "grok",
+    "agy": "agy",
+    "gemini": "agy",
+    "antigravity": "agy",
 }
 
 
@@ -70,17 +84,32 @@ def family(model):
             return "codex" if name == "gpt" else name
     if "grok" in model:
         return "grok"
+    for name in ("antigravity", "gemini", "agy"):
+        if name in model:
+            return "agy"
     if not model or "claude" in model:
         return "claude"
     # An unknown model must not silently route as generic Claude — a typo'd
     # scoped model would bypass its own weekly cap.
     raise RegistryError(
         f"unknown model family: {model!r} "
-        f"(use opus/sonnet/haiku/claude/codex/grok)")
+        f"(use opus/sonnet/haiku/claude/codex/grok/agy)")
 
 
 def family_provider(fam):
     return FAMILY_PROVIDER.get(fam, "claude")
+
+
+def required_windows(provider):
+    """Standard windows a provider must publish before a slot counts as read."""
+    optional = OPTIONAL_WINDOWS.get(provider, ())
+    return tuple(key for key in ("5h", "7d") if key not in optional)
+
+
+def primary_window(provider):
+    """The window rotation and the statusline treat as "the" usage gauge."""
+    required = required_windows(provider)
+    return required[0] if required else "5h"
 
 
 def expand(path):
