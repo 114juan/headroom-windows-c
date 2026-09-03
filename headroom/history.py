@@ -75,7 +75,7 @@ def _finite_number(value, low=None, high=None):
 
 
 def _safe_label(value):
-    return isinstance(value, str) and "@" not in value and len(value) <= 40
+    return isinstance(value, str) and "@" not in value and len(value) <= 80
 
 
 def account_slot_id(account):
@@ -115,7 +115,17 @@ def _project_account(account):
         if not _safe_label(key) or not isinstance(window, dict):
             continue
         used = _finite_number(window.get("used_percent"), 0, 100)
-        reset = _finite_number(window.get("resets_at"))
+        reset_raw = window.get("resets_at")
+        reset = _finite_number(reset_raw)
+        if reset is None and isinstance(reset_raw, str) and reset_raw.strip():
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(reset_raw.strip().replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                reset = _finite_number(dt.timestamp())
+            except (ValueError, TypeError):
+                pass
         windows[key] = {
             "used_percent": used,
             "resets_at": int(reset) if reset is not None else None,

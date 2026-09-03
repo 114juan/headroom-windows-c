@@ -742,14 +742,18 @@ function clamp(v,lo,hi){return Math.min(hi,Math.max(lo,v));}
 function capacity(w){return w&&Number.isFinite(w.used_percent)?clamp(100-w.used_percent,0,100):null;}
 function tone(left){if(left==null)return"unknown";if(left<=10)return"red";if(left<=30)return"orange";if(left<=50)return"yellow";return"green";}
 function age(epoch){if(!Number.isFinite(epoch))return"time unknown";const s=Math.max(0,Math.floor(Date.now()/1e3-epoch));if(s<60)return s+"s ago";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h "+Math.floor(s%3600/60)+"m ago";return Math.floor(s/86400)+"d ago";}
-function untilReset(epoch){if(!Number.isFinite(epoch))return"reset not reported";const s=epoch-Math.floor(Date.now()/1e3);if(s<=0)return"reset due";if(s<86400){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return"resets in "+(h?h+"h ":"")+m+"m";}return"resets "+new Intl.DateTimeFormat(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(1e3*epoch));}
+function untilReset(epoch){if(typeof epoch==="string"&&epoch){const parsed=Date.parse(epoch);if(Number.isFinite(parsed))epoch=Math.floor(parsed/1e3);}if(!Number.isFinite(epoch))return"reset not reported";const s=epoch-Math.floor(Date.now()/1e3);if(s<=0)return"reset due";if(s<86400){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return"resets in "+(h?h+"h ":"")+m+"m";}return"resets "+new Intl.DateTimeFormat(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(1e3*epoch));}
 let snapStale=false; /* set per-render: an old snapshot demotes every row */
 function isCurrent(a){return Boolean(!snapStale&&a&&a.ok===true&&a.routable===true&&a.stale!==true);}
 
 function windowLabel(key){
   if(key==="5h")return"Session 5h";
   if(key==="7d")return"Weekly all";
-  if(key.startsWith("scoped:"))return"Weekly "+key.slice(7);
+  if(key.startsWith("scoped:")){
+    const name=key.slice(7);
+    if(name.toLowerCase().startsWith("weekly ") || name.toLowerCase().startsWith("five hour ")) return name;
+    return"Weekly "+name;
+  }
   return key;
 }
 function windowColumns(accounts){

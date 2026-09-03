@@ -201,6 +201,37 @@ class HistoryPersistenceTests(unittest.TestCase):
         names = {account["name"] for row in left for account in row["accounts"]}
         self.assertEqual(names, {"b"})
 
+    def test_agy_scoped_windows_and_iso_resets_in_history(self):
+        scoped_key = "scoped:Claude and GPT models Weekly Limit Remaining"
+        agy_snapshot = {
+            "schema_version": 1,
+            "generated": NOW,
+            "accounts": [{
+                "id": slot_id("antigravity"),
+                "name": "antigravity",
+                "email": "owner@example.test",
+                "provider": "agy",
+                "plan": "Antigravity",
+                "ok": True,
+                "stale": False,
+                "windows": {
+                    "5h": {"used_percent": 15.0, "resets_at": "2026-09-03T17:27:33Z"},
+                    "7d": {"used_percent": 25.0, "resets_at": "2026-09-06T16:44:09Z"},
+                    scoped_key: {"used_percent": 5.0, "resets_at": "2026-09-10T13:50:23Z"},
+                },
+            }],
+        }
+        self.assertTrue(history.append_snapshot(agy_snapshot, now=NOW))
+        with mock.patch.object(history.time, "time", return_value=NOW):
+            payload = history.response(1, live_ids("antigravity"), generated=NOW)
+        acct = payload["summary"][0]
+        self.assertEqual(acct["provider"], "agy")
+        self.assertIn("5h", acct["windows"])
+        self.assertIn("7d", acct["windows"])
+        self.assertIn(scoped_key, acct["windows"])
+        self.assertEqual(acct["windows"][scoped_key]["current"], 5.0)
+        self.assertIn(scoped_key, payload["analytics"]["windows"])
+
 
 class DemoHistoryFeed(unittest.TestCase):
     def setUp(self):

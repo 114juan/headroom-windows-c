@@ -68,8 +68,14 @@ def _slot_has_creds(account):
     provider = account.get("provider")
     if provider == "agy":
         from . import agy as agy_provider
-        return any(os.path.isfile(os.path.join(home, *rel.split("/")))
-                   for rel in agy_provider.CREDENTIAL_FILES)
+        if any(os.path.isfile(os.path.join(home, *rel.split("/")))
+               for rel in agy_provider.CREDENTIAL_FILES):
+            return True
+        if os.name == "nt":
+            user_home = os.path.expanduser("~")
+            if os.path.normcase(os.path.abspath(home)) == os.path.normcase(os.path.abspath(user_home)):
+                return agy_provider.read_windows_keyring() is not None
+        return False
     filename = ".credentials.json" if provider == "claude" \
         else "auth.json"  # Codex and Grok both store tokens in auth.json
     return os.path.isfile(os.path.join(home, filename))

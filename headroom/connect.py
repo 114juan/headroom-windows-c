@@ -55,7 +55,27 @@ def slot_identity(provider, home):
         elif provider == "grok":
             identity = collector.grok_identity(home)
         elif provider == "agy":
-            identity = collector.agy_local_identity(home)
+            try:
+                identity = collector.agy_local_identity(home)
+            except collector.IdentityBindingError as error:
+                if error.code != "agy_identity_email_missing":
+                    raise
+                _path, creds = collector.agy_credential_file(home)
+                token = agy_provider.access_token(creds)
+                if not token:
+                    raise
+                info_status, info = collector._agy_get(
+                    agy_provider.USERINFO_URL, token, None, 10)
+                email = (info or {}).get("email")
+                if not email or not isinstance(email, str):
+                    raise
+                identity = {
+                    "verified": False,
+                    "email": email,
+                    "account_fingerprint": collector.fingerprint(info.get("sub") or email),
+                    "method": "agy_userinfo",
+                    "credential_digest": collector.credential_digest("agy", home),
+                }
         else:
             identity = collector.codex_identity(home)
         return identity

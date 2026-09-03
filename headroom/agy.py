@@ -312,17 +312,29 @@ def select_credentials(root):
 
 
 def access_token(creds):
-    value = (creds or {}).get("access_token") or (creds or {}).get("accessToken")
+    if not isinstance(creds, dict):
+        return None
+    token_dict = creds.get("token") if isinstance(creds.get("token"), dict) else creds
+    value = (token_dict.get("access_token") or token_dict.get("accessToken")
+             or creds.get("access_token") or creds.get("accessToken"))
     return value if isinstance(value, str) and value else None
 
 
 def refresh_token(creds):
-    value = (creds or {}).get("refresh_token") or (creds or {}).get("refreshToken")
+    if not isinstance(creds, dict):
+        return None
+    token_dict = creds.get("token") if isinstance(creds.get("token"), dict) else creds
+    value = (token_dict.get("refresh_token") or token_dict.get("refreshToken")
+             or creds.get("refresh_token") or creds.get("refreshToken"))
     return value if isinstance(value, str) and value else None
 
 
 def id_token(creds):
-    value = (creds or {}).get("id_token") or (creds or {}).get("idToken")
+    if not isinstance(creds, dict):
+        return None
+    token_dict = creds.get("token") if isinstance(creds.get("token"), dict) else creds
+    value = (token_dict.get("id_token") or token_dict.get("idToken")
+             or creds.get("id_token") or creds.get("idToken"))
     return value if isinstance(value, str) and value else None
 
 
@@ -330,17 +342,29 @@ def expiry_epoch(creds):
     """Access-token expiry as epoch seconds, or None.
 
     google-auth-library writes ``expiry_date`` in **milliseconds**; other
-    writers use ``expiry``/``expires_at`` in seconds.
+    writers use ``expiry``/``expires_at`` in seconds or ISO-8601 strings.
     """
     if not isinstance(creds, dict):
         return None
-    millis = _finite(creds.get("expiry_date"))
-    if millis is not None and millis > 0:
-        return int(millis / 1000)
-    for key in ("expires_at", "expiry"):
-        seconds = _finite(creds.get(key))
-        if seconds is not None and seconds > 0:
-            return int(seconds)
+    token_dict = creds.get("token") if isinstance(creds.get("token"), dict) else creds
+    for source in (creds, token_dict):
+        millis = _finite(source.get("expiry_date"))
+        if millis is not None and millis > 0:
+            return int(millis / 1000)
+        for key in ("expires_at", "expiry"):
+            val = source.get(key)
+            seconds = _finite(val)
+            if seconds is not None and seconds > 0:
+                return int(seconds)
+            if isinstance(val, str) and val.strip():
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(val.strip().replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return int(dt.timestamp())
+                except (ValueError, TypeError):
+                    pass
     return None
 
 
@@ -353,7 +377,69 @@ def oauth_client(creds):
     """
     if not isinstance(creds, dict):
         return None, None
-    client_id = creds.get("client_id") or creds.get("clientId")
-    secret = creds.get("client_secret") or creds.get("clientSecret")
-    return (client_id if isinstance(client_id, str) and client_id else None,
-            secret if isinstance(secret, str) and secret else None)
+    token_dict = creds.get("token") if isinstance(creds.get("token"), dict) else creds
+    for source in (creds, token_dict):
+        client_id = source.get("client_id") or source.get("clientId")
+        secret = source.get("client_secret") or source.get("clientSecret")
+        if client_id or secret:
+            return (client_id if isinstance(client_id, str) and client_id else None,
+                    secret if isinstance(secret, str) and secret else None)
+    return None, None
+
+
+def read_windows_keyring():
+    """Read Antigravity OAuth credentials from Windows Credential Manager.
+
+    Antigravity CLI (``agy``) on Windows uses ``zalando/go-keyring`` with
+    service ``"gemini"`` and user ``"antigravity"``, stored as
+    ``"gemini:antigravity"`` in Windows Credential Manager. Returns the parsed
+    credential dict or None.
+    """
+    import os
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import json
+        from ctypes import wintypes
+        advapi32 = ctypes.windll.advapi32
+
+        class CREDENTIAL(ctypes.Structure):
+            _fields_ = [
+                ('Flags', wintypes.DWORD),
+                ('Type', wintypes.DWORD),
+                ('TargetName', wintypes.LPWSTR),
+                ('Comment', wintypes.LPWSTR),
+                ('LastWritten', wintypes.FILETIME),
+                ('CredentialBlobSize', wintypes.DWORD),
+                ('CredentialBlob', ctypes.c_char_p),
+                ('Persist', wintypes.DWORD),
+                ('AttributeCount', wintypes.DWORD),
+                ('Attributes', ctypes.c_void_p),
+                ('TargetAlias', wintypes.LPWSTR),
+                ('UserName', wintypes.LPWSTR),
+            ]
+
+        CredReadW = advapi32.CredReadW
+        CredReadW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.POINTER(ctypes.POINTER(CREDENTIAL)),
+        ]
+        CredReadW.restype = wintypes.BOOL
+
+        cred_ptr = ctypes.POINTER(CREDENTIAL)()
+        if not CredReadW("gemini:antigravity", 1, 0, ctypes.byref(cred_ptr)):
+            return None
+        c = cred_ptr.contents
+        raw = ctypes.string_at(c.CredentialBlob, c.CredentialBlobSize).decode(
+            "utf-8", errors="replace")
+        payload = json.loads(raw)
+        token_info = payload.get("token") if isinstance(payload.get("token"), dict) else payload
+        return {
+            "access_token": token_info.get("access_token"),
+            "refresh_token": token_info.get("refresh_token"),
+            "expiry": token_info.get("expiry"),
+            "token_type": token_info.get("token_type", "Bearer"),
+        }
+    except Exception:
+        return None

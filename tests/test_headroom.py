@@ -1468,6 +1468,38 @@ class AgyProvider(unittest.TestCase):
         self.assertNotIn("GEMINI_API_KEY", env)
         self.assertEqual(env["PATH"], "/bin")
 
+    def test_expiry_epoch_parses_iso_string(self):
+        from headroom import agy as agy_provider
+        creds = {"expiry": "2026-09-03T17:27:33Z"}
+        self.assertEqual(agy_provider.expiry_epoch(creds), 1788456453)
+        nested = {"token": {"expiry": "2026-09-03T17:27:33Z"}}
+        self.assertEqual(agy_provider.expiry_epoch(nested), 1788456453)
+
+    def test_limits_normalizes_iso_resets_at(self):
+        self._write_creds()
+        opener = _ScriptedOpener([
+            (200, {"currentTier": {"id": "free-tier"}}),
+            (200, self._quota(
+                {"displayName": "Session", "window": "PT5H",
+                 "remainingFraction": 0.8,
+                 "resetTime": "2026-09-03T17:27:33Z"})),
+        ])
+        identity, plan, windows = collect.agy_limits(
+            self.home, now=self.now, opener=opener)
+        self.assertIsInstance(windows["5h"]["resets_at"], int)
+        self.assertEqual(windows["5h"]["resets_at"], 1788456453)
+
+    def test_slot_identity_userinfo_fallback(self):
+        from unittest import mock
+        from headroom import connect
+        self._write_creds(id_token=None)
+        with mock.patch("headroom.collect._agy_get",
+                        return_value=(200, {"email": "keyring-user@example.test", "sub": "sub-123"})):
+            identity = connect.slot_identity("agy", self.home)
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity["email"], "keyring-user@example.test")
+        self.assertEqual(identity["method"], "agy_userinfo")
+
 
 if __name__ == "__main__":
     unittest.main()

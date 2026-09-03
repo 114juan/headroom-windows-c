@@ -783,18 +783,38 @@ def grok_limits(home, expected_email=None, opener=None, now=None):
 # --------------------------------------------------------------- antigravity
 
 def agy_credential_file(home):
-    """(path, credentials) for the file-backed Antigravity login in a slot.
+    """(path, credentials) for the Antigravity login in a slot.
 
     ``agy`` prefers the OS keyring and only writes a token file where no
-    keyring is available, so a slot with none of the known files is HELD —
-    headroom never reads the machine-wide keyring, which could not be bound
-    to one slot anyway (see docs/KNOWN-LIMITS.md).
+    keyring is available. headroom checks file-backed tokens first, falling
+    back to the Windows Credential Manager when adopting the desktop user home
+    (see docs/KNOWN-LIMITS.md).
     """
     for relative in agy_provider.CREDENTIAL_FILES:
         path = os.path.join(home, *relative.split("/"))
         creds = agy_provider.select_credentials(paths.load_json(path))
         if creds is not None:
             return path, creds
+    if os.name == "nt":
+        user_home = os.path.expanduser("~")
+        is_user_home = (
+            os.path.normcase(os.path.abspath(home)) ==
+            os.path.normcase(os.path.abspath(user_home))
+        )
+        if is_user_home:
+            keyring_creds = agy_provider.read_windows_keyring()
+            if keyring_creds is not None and agy_provider.access_token(keyring_creds):
+                cache_path = os.path.join(home, ".gemini", "oauth_creds.json")
+                if os.path.exists(cache_path):
+                    existing = paths.load_json(cache_path) or {}
+                    if existing.get("email"):
+                        keyring_creds["email"] = existing["email"]
+                try:
+                    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                    paths.write_json_atomic(cache_path, keyring_creds, mode=0o600)
+                    return cache_path, keyring_creds
+                except Exception:
+                    return "keyring:gemini:antigravity", keyring_creds
     raise IdentityBindingError("agy_auth_missing")
 
 
@@ -825,12 +845,13 @@ def _agy_headers(token):
     return {
         "authorization": "Bearer " + token,
         "accept": "application/json",
-        "user-agent": "headroom",
+        "user-agent": "Antigravity",
     }
 
 
 def _agy_post(url, token, body, opener, timeout):
     """(status, payload). A status of None means the request never landed."""
+    opener = open_authenticated if opener is None else opener
     headers = _agy_headers(token)
     headers["content-type"] = "application/json"
     request = urllib.request.Request(
@@ -851,6 +872,7 @@ def _agy_post(url, token, body, opener, timeout):
 
 
 def _agy_get(url, token, opener, timeout):
+    opener = open_authenticated if opener is None else opener
     request = urllib.request.Request(url, headers=_agy_headers(token))
     try:
         response = opener(request, timeout=timeout)
@@ -995,6 +1017,9 @@ def agy_limits(home, expected_email=None, opener=None, now=None):
     windows = agy_provider.windows_from_quota(payload)
     if windows is None:
         raise ValueError("malformed antigravity quota payload")
+    for w in windows.values():
+        if isinstance(w, dict) and "resets_at" in w and w["resets_at"] is not None:
+            w["resets_at"] = iso_ep(w["resets_at"])
     try:
         identity = agy_local_identity(home)
     except IdentityBindingError as error:
@@ -1014,6 +1039,12 @@ def agy_limits(home, expected_email=None, opener=None, now=None):
             "plan_type": None,
             "credential_digest": credential_digest("agy", home),
         }
+        if isinstance(creds, dict) and not creds.get("email") and _path and not _path.startswith("keyring:"):
+            try:
+                creds["email"] = info["email"]
+                paths.write_json_atomic(_path, creds, mode=0o600)
+            except OSError:
+                pass
     if expected_email and identity["email"].lower() != expected_email.lower():
         raise IdentityBindingError("slot_bound_to_unexpected_email")
     identity["verified"] = True

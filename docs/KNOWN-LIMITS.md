@@ -117,13 +117,12 @@ dropped rather than turned into an invented percentage.
 
 **Two limits worth knowing before you set an AGY slot up.**
 
-**1. `agy` stores its token in the OS keyring, not in a file.** headroom only
-ever reads file-backed tokens, and it reads them from the slot's own home so
-one slot can never report another account's headroom. A machine-wide keyring
-has neither property: it holds exactly one Antigravity login per desktop
-user, and nothing binds that entry to a slot. So a slot with no
-`oauth_creds.json` is held with `agy_auth_missing`. headroom looks in, most
-specific first:
+**1. `agy` stores its token in the OS keyring, not in a file.** headroom prefers
+file-backed tokens for isolated slots (<home>/oauth_creds.json, etc.).
+On Windows, when adopting the default user home (`~`), headroom reads the
+credentials directly from the Windows Credential Manager (`gemini:antigravity`)
+and caches them to `~/.gemini/oauth_creds.json`. For isolated slot homes, headroom
+looks in, most specific first:
 
 ```
 <home>/oauth_creds.json
