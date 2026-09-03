@@ -217,6 +217,58 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
                  text-transform: uppercase; }
 .provider-count { color: var(--ink-3); font: 500 10px var(--mono); }
 
+.acct-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.badge-provider {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
+  border-radius: 99px; font: 700 8.5px/1.2 var(--mono); letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.badge-provider--claude { background: rgba(245,158,11,.12); color: #f59e0b; border: 1px solid rgba(245,158,11,.3); }
+.badge-provider--agy { background: rgba(56,189,248,.12); color: #38bdf8; border: 1px solid rgba(56,189,248,.3); }
+.badge-provider--grok { background: rgba(192,132,252,.12); color: #c084fc; border: 1px solid rgba(192,132,252,.3); }
+.badge-provider--codex { background: rgba(52,211,153,.12); color: #34d399; border: 1px solid rgba(52,211,153,.3); }
+
+.badge-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px;
+  border-radius: 99px; font: 650 8px/1.2 var(--mono); letter-spacing: .04em;
+  background: var(--cell-bg); color: var(--ink-2); border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.badge-pill.is-active { background: rgba(56,189,248,.1); color: var(--accent); border-color: rgba(56,189,248,.25); }
+.badge-pill.is-risk { background: rgba(255,93,93,.12); color: var(--red); border-color: rgba(255,93,93,.3); font-weight: 700; }
+.badge-pill.is-safe { background: rgba(61,220,132,.1); color: var(--green); border-color: rgba(61,220,132,.25); }
+.badge-pill.is-warn { background: rgba(255,150,64,.12); color: var(--orange); border-color: rgba(255,150,64,.3); }
+
+.win-bar-wrap { width: 100%; max-width: 82px; margin: 1px auto 0; }
+.win-bar { height: 3.5px; border-radius: 99px; background: var(--cell-bg); overflow: hidden; }
+.win-bar-fill { height: 100%; border-radius: inherit; background: var(--tone, var(--accent)); transition: width .6s ease; }
+
+.fleet-filter-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; margin: 20px 0 10px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); box-shadow: var(--panel-shadow);
+}
+.filter-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.filter-pill {
+  appearance: none; padding: 4px 10px; border: 1px solid var(--line);
+  border-radius: 99px; background: transparent; color: var(--ink-2);
+  font: 600 9.5px/1.2 var(--mono); cursor: pointer; transition: all .18s ease;
+}
+.filter-pill:hover { color: var(--ink); border-color: var(--line-strong); background: var(--panel-2); }
+.filter-pill.is-active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+.search-box {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel-2); color: var(--ink); font: 500 10px var(--mono);
+}
+.search-box svg { opacity: .6; flex: none; }
+.search-box input {
+  border: none; background: transparent; color: var(--ink);
+  font: inherit; outline: none; width: 140px;
+}
+.search-box input::placeholder { color: var(--ink-3); }
+
 .account { display: grid; align-items: start;
            grid-template-columns: minmax(190px, 1.2fr) repeat(var(--win-cols, 2), minmax(118px, 1fr)) minmax(120px, .8fr);
            gap: 16px; padding: 16px; margin-top: 8px;
@@ -622,6 +674,19 @@ button.refresh:disabled { opacity: .55; cursor: wait; }
   </section>
 
   <div class="statusline" id="status" aria-live="polite">Loading usage readings…</div>
+  <div class="fleet-filter-bar" id="fleet-filter-bar">
+    <div class="filter-group" id="provider-filters">
+      <button type="button" class="filter-pill is-active" data-filter="all">All <span id="count-all"></span></button>
+      <button type="button" class="filter-pill" data-filter="claude">Claude <span id="count-claude"></span></button>
+      <button type="button" class="filter-pill" data-filter="agy">Antigravity <span id="count-agy"></span></button>
+      <button type="button" class="filter-pill" data-filter="grok">Grok <span id="count-grok"></span></button>
+      <button type="button" class="filter-pill" data-filter="codex">Codex <span id="count-codex"></span></button>
+    </div>
+    <div class="search-box">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="7" r="5"/><line x1="11" y1="11" x2="15" y2="15"/></svg>
+      <input type="text" id="account-search" placeholder="Search accounts…" aria-label="Search accounts">
+    </div>
+  </div>
   <div id="providers" aria-live="polite"></div>
 
   <footer class="legend" aria-label="Capacity colours">
@@ -750,9 +815,12 @@ function windowLabel(key){
   if(key==="5h")return"Session 5h";
   if(key==="7d")return"Weekly all";
   if(key.startsWith("scoped:")){
-    const name=key.slice(7);
-    if(name.toLowerCase().startsWith("weekly ") || name.toLowerCase().startsWith("five hour ")) return name;
-    return"Weekly "+name;
+    let name=key.slice(7);
+    name=name.replace(/Limit Remaining/gi,"").trim();
+    if(/Claude and GPT models.*Weekly/i.test(name))return"Claude & GPT (Weekly)";
+    if(/Claude and GPT models.*(5h|Five Hour)/i.test(name))return"Claude & GPT (5h)";
+    if(/Five Hour/i.test(name))return name.replace(/Five Hour/i,"5h");
+    return name;
   }
   return key;
 }
@@ -803,25 +871,37 @@ function windowPace(w){
     return null;
   const total=w.window_minutes*60;
   if(!Number.isFinite(w.resets_at))return null;
-  const elapsed=clamp(total-(w.resets_at-Date.now()/1e3),90,total);
+  const now=Date.now()/1e3;
+  const timeToReset=Math.max(0,w.resets_at-now);
+  const elapsed=clamp(total-timeToReset,90,total);
   const rate=w.used_percent/(elapsed/3600);
   const left=clamp(100-w.used_percent,0,100);
   const eta=rate>0.08?left/rate:null;
-  return {rate:rate, eta:eta, left:left};
+  const etaSec=eta!=null?eta*3600:null;
+  const capRisk=etaSec!=null&&etaSec<timeToReset;
+  return {rate:rate, eta:eta, left:left, timeToReset:timeToReset, capRisk:capRisk};
 }
 function liveFleetPace(accounts){
   const rates=[];
   const soonest=[];
   let draining=0;
+  let capRisks=[];
   (accounts||[]).forEach(account=>{
-    const pace=windowPace((account.windows||{})["5h"]);
-    if(!pace)return;
-    if(pace.rate>0.08){rates.push(pace.rate); draining+=1;}
-    if(pace.eta!=null)soonest.push({name:account.email||account.name, eta:pace.eta});
+    Object.entries(account.windows||{}).forEach(([winKey, w])=>{
+      const pace=windowPace(w);
+      if(!pace)return;
+      if(winKey==="5h"||winKey==="7d"){
+        if(pace.rate>0.08){rates.push(pace.rate); draining+=1;}
+        if(pace.eta!=null)soonest.push({name:account.email||account.name, eta:pace.eta, key:winKey, capRisk:pace.capRisk});
+      }
+      if(pace.capRisk){
+        capRisks.push({name:account.email||account.name, key:winKey, eta:pace.eta});
+      }
+    });
   });
   soonest.sort((a,b)=>a.eta-b.eta);
   const fleet=rates.length?rates.reduce((sum,value)=>sum+value,0):null;
-  return {rate:fleet, draining:draining, soonest:soonest[0]||null};
+  return {rate:fleet, draining:draining, soonest:soonest[0]||null, capRisks:capRisks};
 }
 function historyPeakHour(key){
   const windows=historyData&&historyData.analytics&&historyData.analytics.windows;
@@ -845,16 +925,34 @@ function paintUsagePulse(){
   const live=liveFleetPace((usageData&&usageData.accounts)||[]);
   const count=usageData&&usageData.accounts?usageData.accounts.length:0;
   set("pulse-burn", live.rate==null?"–":fmtRate(live.rate));
-  set("pulse-burn-note", live.rate==null?"no session pace yet":"sum of live 5h rates");
-  set("pulse-empty", live.soonest?fmtEta(live.soonest.eta):"not draining");
-  set("pulse-empty-note", live.soonest?live.soonest.name:"all session tanks idle");
+  set("pulse-burn-note", live.rate==null?"no active session pace":"fleet consumption rate");
+  
+  if(live.capRisks&&live.capRisks.length){
+    const r=live.capRisks[0];
+    set("pulse-empty", fmtEta(r.eta));
+    set("pulse-empty-note", "⚠️ Cap risk: "+r.name+" ("+windowLabel(r.key)+")");
+    const emptyEl=document.getElementById("pulse-empty");
+    if(emptyEl)emptyEl.style.color="var(--red)";
+  } else if(live.soonest){
+    set("pulse-empty", fmtEta(live.soonest.eta));
+    set("pulse-empty-note", "✓ Safe runway: "+live.soonest.name);
+    const emptyEl=document.getElementById("pulse-empty");
+    if(emptyEl)emptyEl.style.color="var(--ink)";
+  } else {
+    set("pulse-empty", "not draining");
+    set("pulse-empty-note", "all subscription tanks idle");
+    const emptyEl=document.getElementById("pulse-empty");
+    if(emptyEl)emptyEl.style.color="var(--ink)";
+  }
+
   set("pulse-drain", count?live.draining+"/"+count:"–");
-  set("pulse-drain-note", live.draining?"accounts currently spending":"no active session spend");
+  set("pulse-drain-note", live.draining?"accounts actively spending":"all accounts idle");
+  
   const peak=historyPeakHour("5h");
   const weeklyPeak=peak==null?historyPeakHour("7d"):null;
   const hour=peak!=null?peak:weeklyPeak;
   set("pulse-peak", hour==null?"–":hourRange(hour));
-  set("pulse-peak-note", hour==null?"needs usage history":(peak!=null?"session spend, local time":"weekly spend, local time"));
+  set("pulse-peak-note", hour==null?"waiting for history":(peak!=null?"peak activity (local)":"weekly peak (local)"));
 }
 
 /* -------------------------------------------------------------- render */
@@ -890,14 +988,30 @@ function windowMarkup(account,key){
     (w?"reading unavailable":(key.startsWith("scoped:")?"no scoped cap":"no reading yet"))):untilReset(w.resets_at);
   const pace=unknown?null:windowPace(w);
   let paceHtml="";
+  let barHtml="";
+  let riskBadge="";
+
+  if(!unknown){
+    const used=clamp(100-left,0,100);
+    barHtml='<div class="win-bar-wrap" title="'+used.toFixed(1)+'% used"><div class="win-bar">'+
+      '<div class="win-bar-fill" style="width:'+used+'%;--tone:'+usedTone(used)+'"></div></div></div>';
+  }
+
   if(pace){
     const hot=pace.eta!=null&&pace.eta<1?" is-critical":pace.rate>=15?" is-hot":"";
-    paceHtml='<p class="win-pace'+hot+'">'+esc(fmtRate(pace.rate))+
+    paceHtml='<p class="win-pace'+hot+'">⚡ '+esc(fmtRate(pace.rate))+
       (pace.eta!=null?" · "+fmtEta(pace.eta):"")+"</p>";
+    if(pace.capRisk){
+      riskBadge='<span class="badge-pill is-risk" title="Will exhaust before window resets">⚠️ Cap Risk</span>';
+    }else if(pace.rate>0.08){
+      riskBadge='<span class="badge-pill is-safe" title="Resets before empty">✓ Safe runway</span>';
+    }
   }
+
   return '<div class="win"><span class="win-name">'+esc(windowLabel(key))+"</span>"+
-    ringMarkup(left)+'<p class="win-note">'+esc(note)+"</p>"+paceHtml+"</div>";
+    ringMarkup(left)+barHtml+'<p class="win-note">'+esc(note)+"</p>"+paceHtml+riskBadge+"</div>";
 }
+
 // Calm, specific state per account. Codex reads its CLI's own telemetry, so
 // idle/limited are EXPECTED states — label them clearly, never as "broken".
 function accountState(account){
@@ -956,16 +1070,37 @@ function accountActions(account,totalAccounts){
   bits.push("</div>");
   return bits.join("");
 }
+
 function accountMarkup(account,columns,totalAccounts){
   const s=accountState(account);
   const dot=s.cls==="live"?'<span class="live-dot" aria-hidden="true"></span>':"";
-  return '<article class="account is-'+s.cls+'" style="--win-cols:'+columns.length+'">'+
-    '<div class="acct-identity"><span class="acct-email">'+esc(account.email||account.name)+"</span>"+
-    '<div class="acct-meta"><span>'+esc(account.name)+"</span><span>"+esc(account.plan||account.provider)+"</span></div>"+
-    accountActions(account,totalAccounts)+"</div>"+
+  const prov=account.provider||"other";
+  const provTitle={claude:"Claude",grok:"Grok",agy:"Antigravity",codex:"Codex"}[prov]||prov;
+  
+  let highestBurn=0;
+  Object.values(account.windows||{}).forEach(w=>{
+    const p=windowPace(w);
+    if(p&&p.rate>highestBurn)highestBurn=p.rate;
+  });
+  const burnTag=highestBurn>0.08
+    ?'<span class="badge-pill is-active">⚡ '+fmtRate(highestBurn)+'</span>'
+    :'<span class="badge-pill">💤 Idle</span>';
+
+  return '<article class="account is-'+s.cls+'" data-provider="'+esc(prov)+
+    '" data-search="'+esc(((account.name||"")+" "+(account.email||"")+" "+provTitle).toLowerCase())+
+    '" style="--win-cols:'+columns.length+'">'+
+    '<div class="acct-identity">'+
+      '<div class="acct-header">'+
+        '<span class="badge-provider badge-provider--'+esc(prov)+'">'+esc(provTitle)+'</span>'+
+        burnTag+
+      '</div>'+
+      '<span class="acct-email" title="'+esc(account.email||account.name)+'">'+esc(account.email||account.name)+'</span>'+
+      '<div class="acct-meta"><span>'+esc(account.name)+'</span><span>'+esc(account.plan||provTitle)+'</span></div>'+
+      accountActions(account,totalAccounts)+
+    '</div>'+
     columns.map(k=>windowMarkup(account,k)).join("")+
-    '<div class="state"><span class="state-badge state-'+s.cls+'">'+dot+esc(s.label)+"</span>"+
-    '<p class="state-note">'+esc(s.note)+"</p></div></article>";
+    '<div class="state"><span class="state-badge state-'+s.cls+'">'+dot+esc(s.label)+'</span>'+
+    '<p class="state-note">'+esc(s.note)+'</p></div></article>';
 }
 function providerMarkup(provider,accounts,totalAccounts){
   if(!accounts.length)return"";
@@ -1043,10 +1178,55 @@ function render(data){
   const status=document.getElementById("status");
   status.textContent=warnings.length?("⚠ "+warnings.join(" — ")):"Full rings are available capacity. Colors show what's left, not what's used.";
   status.className="statusline"+(warnings.length?" is-error":"");
+  set("count-all", String(accounts.length));
+  set("count-claude", String(claude.length));
+  set("count-agy", String(agy.length));
+  set("count-grok", String(grok.length));
+  set("count-codex", String(codex.length));
+  applyAccountFilters();
   paintUsagePulse();
   armRings();
   finishBoot("Ready");
 }
+
+let currentProviderFilter="all";
+let currentSearchQuery="";
+
+function applyAccountFilters(){
+  const query=currentSearchQuery.trim().toLowerCase();
+  document.querySelectorAll(".account[data-provider]").forEach(el=>{
+    const p=el.getAttribute("data-provider");
+    const s=el.getAttribute("data-search")||"";
+    const matchesProvider=(currentProviderFilter==="all"||p===currentProviderFilter);
+    const matchesSearch=(!query||s.includes(query));
+    el.style.display=(matchesProvider&&matchesSearch)?"":"none";
+  });
+  document.querySelectorAll(".provider").forEach(sec=>{
+    const visibleCards=sec.querySelectorAll('.account:not([style*="display: none"])');
+    sec.style.display=visibleCards.length?"":"none";
+  });
+}
+
+(function bindFilters(){
+  const filterBar=document.getElementById("fleet-filter-bar");
+  if(!filterBar||filterBar.dataset.bound)return;
+  filterBar.dataset.bound="1";
+  filterBar.addEventListener("click",ev=>{
+    const pill=ev.target.closest(".filter-pill[data-filter]");
+    if(!pill)return;
+    filterBar.querySelectorAll(".filter-pill").forEach(p=>p.classList.remove("is-active"));
+    pill.classList.add("is-active");
+    currentProviderFilter=pill.getAttribute("data-filter")||"all";
+    applyAccountFilters();
+  });
+  const search=document.getElementById("account-search");
+  if(search){
+    search.addEventListener("input",()=>{
+      currentSearchQuery=search.value||"";
+      applyAccountFilters();
+    });
+  }
+})();
 function renderError(message){
   document.getElementById("providers").innerHTML=
     '<div class="empty">Usage feed unavailable<small>'+esc(message)+
@@ -1452,11 +1632,14 @@ function renderPaceBoard(data,key){
   }
   const maxRate=Math.max(1, ...rows.map(row=>row.rate>0?row.rate:0));
   target.innerHTML='<table class="leaderboard"><thead><tr><th scope="col">Rank</th><th scope="col">Account</th>'+
-    '<th scope="col">Burn</th><th scope="col">Active</th><th scope="col">Empty in</th><th scope="col">Peak hour</th>'+
+    '<th scope="col">Provider</th><th scope="col">Burn</th><th scope="col">Active</th><th scope="col">Empty in</th><th scope="col">Peak hour</th>'+
     '<th scope="col">Spent</th></tr></thead><tbody>'+rows.map((row,index)=>{
       const metric=row.metric;
       const width=row.rate>0?Math.min(100,Math.max(6,row.rate/maxRate*100)):0;
+      const prov=row.account.provider||"";
+      const provTitle={claude:"Claude",grok:"Grok",agy:"Antigravity",codex:"Codex"}[prov]||prov;
       return '<tr><td class="rank">'+(index+1)+'</td><td class="leader-name">'+esc(row.account.name)+
+        '</td><td><span class="badge-provider badge-provider--'+esc(prov)+'">'+esc(provTitle)+'</span>'+
         '</td><td><span class="lb-bar" style="--w:'+width+'%;--tone:'+usedTone(Math.min(100,row.rate*8))+
         '" aria-hidden="true"><i></i></span>'+esc(fmtRate(row.rate))+
         '</td><td>'+esc(fmtRate(metric.active_burn_per_hour))+
@@ -1479,13 +1662,18 @@ function renderLeaderboard(data){
   target.innerHTML='<table class="leaderboard"><thead><tr><th scope="col">Rank</th><th scope="col">Account</th>'+
     '<th scope="col">Provider</th><th scope="col">Avg weekly used</th><th scope="col">Burn</th><th scope="col">Empty in</th>'+
     '<th scope="col">Cap hits</th><th scope="col">Samples</th>'+
-    '</tr></thead><tbody>'+data.leaderboard.map(account=>'<tr><td class="rank">'+esc(account.rank)+
-    '</td><td class="leader-name">'+esc(account.name)+'</td><td>'+esc(account.provider||"")+
-    '</td><td><span class="lb-bar" style="--w:'+(Number.isFinite(account.average)?Math.min(100,Math.max(0,account.average)):0)+
-    '%;--tone:'+usedTone(account.average)+'" aria-hidden="true"><i></i></span>'+statsPct(account.average)+
-    '</td><td>'+esc(fmtRate(account.recent_burn_per_hour||account.burn_per_hour))+
-    '</td><td>'+esc(Number.isFinite(account.hours_to_empty)?fmtEta(account.hours_to_empty):"idle")+
-    '</td><td>'+esc(account.cap_hit_episodes)+'</td><td>'+esc(account.sample_count)+"</td></tr>").join("")+"</tbody></table>";
+    '</tr></thead><tbody>'+data.leaderboard.map(account=>{
+      const prov=account.provider||"";
+      const provTitle={claude:"Claude",grok:"Grok",agy:"Antigravity",codex:"Codex"}[prov]||prov;
+      return '<tr><td class="rank">'+esc(account.rank)+
+      '</td><td class="leader-name">'+esc(account.name)+
+      '</td><td><span class="badge-provider badge-provider--'+esc(prov)+'">'+esc(provTitle)+'</span>'+
+      '</td><td><span class="lb-bar" style="--w:'+(Number.isFinite(account.average)?Math.min(100,Math.max(0,account.average)):0)+
+      '%;--tone:'+usedTone(account.average)+'" aria-hidden="true"><i></i></span>'+statsPct(account.average)+
+      '</td><td>'+esc(fmtRate(account.recent_burn_per_hour||account.burn_per_hour))+
+      '</td><td>'+esc(Number.isFinite(account.hours_to_empty)?fmtEta(account.hours_to_empty):"idle")+
+      '</td><td>'+esc(account.cap_hit_episodes)+'</td><td>'+esc(account.sample_count)+"</td></tr>";
+    }).join("")+"</tbody></table>";
 }
 function renderStats(){
   if(!historyData)return;

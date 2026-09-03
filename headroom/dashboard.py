@@ -91,6 +91,15 @@ def build(config=None, out_dir=None, snapshot_file=None, demo=False):
     if snapshot_file and os.path.exists(snapshot_file) \
             and os.path.realpath(snapshot_file) != os.path.realpath(target):
         shutil.copy2(snapshot_file, target)
+    if not demo:
+        try:
+            live_ids = {history.account_slot_id(a) for a in registry.accounts(config)}
+            hist_payload = history.response(7, live_ids=live_ids)
+            if hist_payload:
+                target_hist = os.path.join(out_dir, "history.json")
+                paths.write_json_atomic(target_hist, hist_payload)
+        except Exception:
+            pass
     print(f"dashboard built: {index}")
     return index
 
